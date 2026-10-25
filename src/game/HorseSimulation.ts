@@ -660,9 +660,11 @@ export class HorseSimulation {
           lead >= 0 &&
           state[lead] === HorseState.FALL &&
           this.y[i] <= 0 &&
-          this.speed[i] > 7 &&
+          (this.speed[i] > 7 || this.queueTime[i] > LOD.CLIMB_AFTER) &&
           this.eventCooldown[i] <= 0
         ) {
+          // (a horse stuck behind a pile for a while scrambles over it — comedic, and it
+          // keeps the queue moving)
           const dp = this.progress[lead] - this.progress[i];
           if (dp > 2.2 && dp < 5.5) {
             this.eventCooldown[i] = COLLISION.EVENT_COOLDOWN;
@@ -1121,12 +1123,10 @@ export class HorseSimulation {
     this.grace[best] = 0;
     // tumble towards the player's line so the pile lands across it
     this.fall(best, px - this.x[best], 0, DIRECTOR.DOWN_SCALE);
-    if (inLine) {
-      const d = px - this.x[best];
-      this.x[best] += Math.max(-1.5, Math.min(1.5, d));
-    }
+
     this.groupEvents.push({
-      x: this.x[best],
+      // in-line events are centred on the player's lane so the pile lands across it
+      x: inLine ? px : this.x[best],
       p: this.progress[best],
       r: DIRECTOR.RADIUS,
       allLayers: true,
@@ -1253,6 +1253,9 @@ export class HorseSimulation {
     let target = PLAYER.CRUISE_SPEED * (this.winded > 0 ? PLAYER.WINDED_FACTOR : 1);
     if (this.dashing && !this.dashBlocked) target = PLAYER.DASH_SPEED;
     if (this.boostTime > 0) target += PLAYER.JUMP_BOOST;
+    // hard sideways steering at a gallop costs forward speed (swerving round a pile is not
+    // free; a clean jump keeps the pace)
+    target *= 1 - (PLAYER.STEER_DRAG * Math.abs(this.vx[i])) / PLAYER.LATERAL_MAX;
     this.targetSpeed[i] = target;
     this.desiredVx[i] = clampf(intent.steer, -1, 1) * PLAYER.LATERAL_MAX;
     if (intent.jump && this.y[i] <= 0 && this.jumpCooldown <= 0) {

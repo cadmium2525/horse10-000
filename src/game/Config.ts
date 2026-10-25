@@ -106,7 +106,7 @@ export const HORSE = {
 } as const;
 
 export const PLAYER = {
-  CRUISE_SPEED: 21.5,
+  CRUISE_SPEED: 22.2,
   DASH_SPEED: 25,
   ACCEL: 6,
   LATERAL_MAX: 7.5,
@@ -126,12 +126,14 @@ export const PLAYER = {
   DASH_RISK: 1.9,
   DASH_LANDING_RISK: 1.3,
   /** gauge refills */
-  JUMP_CLEAR_GAUGE: 0.35,
+  JUMP_CLEAR_GAUGE: 0.5,
   NEAR_MISS_GAUGE: 0.05,
   PASS_GAUGE: 0.0012,
+  /** forward-speed loss at full lateral speed (fraction) */
+  STEER_DRAG: 0.2,
   /** clearing a downed horse / low pile gives a short burst */
-  JUMP_BOOST: 4.5,
-  JUMP_BOOST_TIME: 1.3,
+  JUMP_BOOST: 6,
+  JUMP_BOOST_TIME: 2.5,
   /** share of the closing speed the player loses when hitting an NPC from behind */
   SHOULDER_LOSS: 0.55,
   /** lateral shove (m/s) given to an NPC the player runs into */
@@ -246,6 +248,8 @@ export const LOD = {
   QUEUE_MIN_SPEED: 0.5,
   /** a 1st/2nd horse in such a queue waits at most this long (s) before squeezing past */
   QUEUE_PATIENCE: 0.6,
+  /** after this long stuck behind a downed horse an NPC may scramble over it */
+  CLIMB_AFTER: 1.2,
   /** a lane change needs this much free length (m) ahead of and behind the horse */
   LANE_CHANGE_CLEAR: 3,
   /** lateral easing (m/tick) for far-field horses overlapping side by side */
@@ -276,10 +280,10 @@ export const DIRECTOR = {
   /** scripted piles stay down longer so the player actually reaches them (jump or go round) */
   DOWN_SCALE: 2.4,
   SIDE: 22,
-  RADIUS: 6,
+  RADIUS: 8,
   CHANCE: 0.55,
   /** share of events placed across the player's own line */
-  IN_LINE: 0.6,
+  IN_LINE: 0.75,
 } as const;
 
 export const RACE = {

@@ -99,13 +99,16 @@ export class CameraRig {
     if (this.mode === 'title' && this.course) {
       // high slow orbit over the infield: the whole oval and the 10,000-strong band
       this.course.infieldCenter(this.centre);
-      const a = this.modeTime * 0.04 + 2.2;
-      const R = 620;
-      tx = this.centre[0] + Math.cos(a) * R;
-      tz = this.centre[1] + Math.sin(a) * R;
-      ty = 210;
-      lx = (t.x + this.centre[0]) * 0.5;
-      lz = (t.z + this.centre[1]) * 0.5;
+      // orbit around the pack, from above the infield side
+      const a = this.modeTime * 0.05 + 2.4;
+      const R = 260;
+      const cx = t.x * 0.75 + this.centre[0] * 0.25;
+      const cz = t.z * 0.75 + this.centre[1] * 0.25;
+      tx = cx + Math.cos(a) * R;
+      tz = cz + Math.sin(a) * R;
+      ty = 120;
+      lx = t.x;
+      lz = t.z;
       ly = 0;
       rate = 2;
     } else if (this.mode === 'finish') {
@@ -125,8 +128,8 @@ export class CameraRig {
       // follow the course: camera on the centreline-parallel curve behind the player,
       // looking at a point ahead on the course (so it sees round the turn)
       if (this.course) {
-        this.course.toWorld(t.cx * 0.9, t.cs - dist, this.tmpA);
-        this.course.toWorld(t.cx * 0.8, t.cs + this.lookAhead, this.tmpB);
+        this.course.toWorld(t.cx, t.cs - dist, this.tmpA);
+        this.course.toWorld(t.cx, t.cs + this.lookAhead, this.tmpB);
         tx = this.tmpA[0];
         tz = this.tmpA[1];
         lx = this.tmpB[0];

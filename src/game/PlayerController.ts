@@ -167,21 +167,40 @@ export class AutoBot {
     const jumpAt = 2.4 + mySpeed * 0.18;
     const landAt = mySpeed * 0.78;
     let landingBlocked = false;
+    let nearestDown = Infinity;
+    let nearestDownX = 0;
     for (let r = 0; r < found; r++) {
       const j = res[r];
       if (j === p || Math.abs(sim.x[j] - px) > 1.4) continue;
       const d = sim.progress[j] - pp;
       if (d <= 0) continue;
       if (sim.state[j] === HorseState.FALL) {
-        if (this.canJump && sim.groundY[j] + 0.75 < 1.2 && d > jumpAt - 1.2 && d < jumpAt + 0.8) jump = true;
+        const top = sim.groundY[j] + sim.y[j] - sim.groundY[j] + 0.75;
+        if (this.canJump && top < 1.2 && d > jumpAt - 1.2 && d < jumpAt + 0.8) jump = true;
         if (d > landAt - 3 && d < landAt + 3) landingBlocked = true;
+        // anything too tall anywhere under the flight path makes the jump a crash
+        if (d < landAt + 1 && top >= 1.25) landingBlocked = true;
+        if (d < nearestDown) {
+          nearestDown = d;
+          nearestDownX = sim.x[j];
+        }
       } else if (d < clear) {
         clear = d;
       }
     }
+    // dashing is risky in traffic: keep a buffer beside the corridor too
+    for (let r = 0; r < found && clear > 0; r++) {
+      const j = res[r];
+      if (j === p || sim.state[j] === HorseState.FALL) continue;
+      const d = sim.progress[j] - pp;
+      if (d > -1 && d < 10 && Math.abs(sim.x[j] - px) < 2.2) clear = Math.min(clear, Math.max(0, d));
+    }
     if (landingBlocked) jump = false;
+    // emergency: a downed horse right ahead that we are not jumping -> swerve
+    let swerve = 0;
+    if (!jump && nearestDown < jumpAt + 1 && !(sim.y[p] > 0)) swerve = px >= nearestDownX ? 1 : -1;
     if (jump) this.jumpRequests++;
-    let steer = (this.laneTarget - px) * 0.7;
+    let steer = swerve !== 0 ? swerve : (this.laneTarget - px) * 0.7;
     if (this.noise > 0) {
       this.noisePhase += 0.07;
       steer += this.noise * (Math.sin(this.noisePhase) + 0.5 * Math.sin(this.noisePhase * 2.3 + 1));
