@@ -1,3 +1,4 @@
+import { COURSE } from '../game/Config';
 import { Rng, deriveSeed } from './Seed';
 
 /**
@@ -48,8 +49,8 @@ export class Course implements CourseSpec {
 
   constructor(seed: number, opts?: Partial<Pick<CourseSpec, 'length' | 'width'>>) {
     this.seed = seed;
-    this.length = opts?.length ?? 1600;
-    this.width = opts?.width ?? 260;
+    this.length = opts?.length ?? COURSE.LENGTH;
+    this.width = opts?.width ?? COURSE.WIDTH;
     this.sMin = -400;
     this.sMax = this.length + 400;
     this.bends = generateBends(seed, this.length);

@@ -75,6 +75,20 @@ export class World {
     Object.assign(this.horses.settings, LOD_LEVELS[Math.max(0, Math.min(LOD_LEVELS.length - 1, q.level))]);
   }
 
+  /** shared GPU resources are freed by dispose(); scenery is static and owned here */
+  private disposeScene(): void {
+    this.scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+      const mat = m.material as THREE.Material | THREE.Material[] | undefined;
+      const mats = Array.isArray(mat) ? mat : mat ? [mat] : [];
+      for (const mm of mats) {
+        for (const v of Object.values(mm)) if (v instanceof THREE.Texture) v.dispose();
+        mm.dispose();
+      }
+    });
+  }
+
   /** Swap in a fresh simulation (restart). Must share the same seed/course. */
   setSimulation(sim: HorseSimulation): void {
     this.horses.rebind(sim);
@@ -101,6 +115,7 @@ export class World {
 
   dispose(): void {
     this.horses.dispose();
+    this.disposeScene();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

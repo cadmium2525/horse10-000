@@ -15,7 +15,8 @@ export class SpatialHash {
   private readonly cellOf: Int32Array; // per inserted entry
   private readonly entries: Int32Array;
   private count = 0;
-  private readonly visited = new Int32Array(64);
+  /** buckets already visited by the current query (grows on demand) */
+  private visited = new Int32Array(64);
 
   constructor(cellSize: number, tableSize: number, capacity: number) {
     if ((tableSize & (tableSize - 1)) !== 0) throw new Error('tableSize must be a power of two');
@@ -44,7 +45,6 @@ export class SpatialHash {
       start[b + 1]++;
     }
     for (let b = 1; b < start.length; b++) start[b] += start[b - 1];
-    // stable placement: walk ids in order, using a cursor copy of start
     const cursor = this.cursor;
     cursor.set(start.subarray(0, start.length - 1));
     for (let k = 0; k < count; k++) {
@@ -61,7 +61,7 @@ export class SpatialHash {
   /**
    * Visit every inserted id whose cell overlaps the rectangle. May report ids slightly
    * outside the rectangle (cell granularity / bucket aliasing) — callers filter by distance.
-   * Buckets are deduplicated so an id is reported at most once.
+   * Buckets are deduplicated so an id is reported at most once, for any rectangle size.
    */
   forEachInRect(x0: number, p0: number, x1: number, p1: number, fn: (id: number) => void): void {
     const inv = this.inv;
@@ -69,6 +69,8 @@ export class SpatialHash {
     const cx1 = Math.floor(x1 * inv);
     const cy0 = Math.floor(p0 * inv);
     const cy1 = Math.floor(p1 * inv);
+    const cells = (cx1 - cx0 + 1) * (cy1 - cy0 + 1);
+    if (cells > this.visited.length) this.visited = new Int32Array(Math.min(this.mask + 1, cells * 2));
     let nVisited = 0;
     const visited = this.visited;
     for (let cy = cy0; cy <= cy1; cy++) {
@@ -82,7 +84,7 @@ export class SpatialHash {
           }
         }
         if (dup) continue;
-        if (nVisited < visited.length) visited[nVisited++] = b;
+        visited[nVisited++] = b;
         const end = this.cellStart[b + 1];
         for (let e = this.cellStart[b]; e < end; e++) fn(this.entries[e]);
       }
@@ -100,18 +102,24 @@ let neighborBuf = new Int32Array(256);
  * with a vertical extent so jumping horses clear fallen ones (but not standing ones).
  *
  * Outcomes:
- *  - separation (mostly lateral) + speed exchange (rear horse is checked)
- *  - running into a FALLEN horse => trip (stumble or fall)  [A and B]  -> chain reactions
- *  - hard contact between upright horses => stumble; stumble + another hit => fall  [A only]
- *  - a freshly tumbling horse shoves neighbours sideways (impulse)
+ *  - separation (mostly lateral) + speed exchange (rear horse is checked). Positional
+ *    correction is budgeted per horse per tick (smaller just after leaving layer C) so
+ *    overlaps resolve over several ticks instead of teleporting.
+ *  - running into a FALLEN horse => trip (stumble or fall)  [A, B at reduced odds]
+ *  - hard contact between upright horses => stumble; stumble + another hit => fall  [A]
+ *  - accident rolls happen once per contact EVENT (per-horse cooldown), not every tick,
+ *    and trip odds decay with the chain generation of the fallen horse => local chains.
  */
 export function resolveCollisions(sim: HorseSimulation): void {
   const hash = sim.hash;
   hash.build(sim.active, sim.activeCount, sim.x, sim.progress);
 
-  const { x, progress, y, speed, vx, state, layer, stateTime } = sim;
+  const { x, progress, y, speed, vx, state, layer, stateTime, corrUsed, layerAge } = sim;
+  for (let k = 0; k < sim.activeCount; k++) corrUsed[sim.active[k]] = 0;
   const reach = HORSE.FALLEN_HALF_LENGTH * 2;
   const reachX = HORSE.FALLEN_HALF_WIDTH * 2;
+  const budget = (h: number) =>
+    h !== FIELD.PLAYER && layerAge[h] < COLLISION.FRESH_TICKS ? COLLISION.MAX_CORRECTION_FRESH : COLLISION.MAX_CORRECTION;
 
   for (let k = 0; k < sim.activeCount; k++) {
     const i = sim.active[k];
@@ -173,13 +181,25 @@ export function resolveCollisions(sim: HorseSimulation): void {
       wI /= wSum;
       wJ /= wSum;
 
-      // positional separation (lateral fully, longitudinal partially: speeds handle the rest)
+      // positional separation (lateral fully, longitudinal partially: speeds handle the rest),
+      // limited by each horse's remaining correction budget for this tick
       const sepX = nx * pen * rx;
       const sepP = np * pen * rp * 0.5;
-      x[i] -= sepX * wI;
-      x[j] += sepX * wJ;
-      progress[i] -= sepP * wI;
-      progress[j] += sepP * wJ;
+      const mag = Math.abs(sepX) + Math.abs(sepP);
+      if (mag > 0) {
+        const needI = mag * wI;
+        const needJ = mag * wJ;
+        const sI = needI > 0 ? Math.min(1, Math.max(0, budget(i) - corrUsed[i]) / needI) : 0;
+        const sJ = needJ > 0 ? Math.min(1, Math.max(0, budget(j) - corrUsed[j]) / needJ) : 0;
+        x[i] -= sepX * wI * sI;
+        progress[i] -= sepP * wI * sI;
+        x[j] += sepX * wJ * sJ;
+        progress[j] += sepP * wJ * sJ;
+        corrUsed[i] += needI * sI;
+        corrUsed[j] += needJ * sJ;
+        if (corrUsed[i] > sim.maxCorrectionThisTick) sim.maxCorrectionThisTick = corrUsed[i];
+        if (corrUsed[j] > sim.maxCorrectionThisTick) sim.maxCorrectionThisTick = corrUsed[j];
+      }
 
       // speed exchange: the rear horse is checked
       const rear = dp > 0 ? i : j;
@@ -189,7 +209,7 @@ export function resolveCollisions(sim: HorseSimulation): void {
       const impact = closing + latImpact;
       if (closing > 0) {
         speed[rear] -= closing * 0.6;
-        if (!(state[front] === HorseState.FALL)) speed[front] += closing * 0.15;
+        if (state[front] !== HorseState.FALL) speed[front] += closing * 0.15;
       }
       // lateral velocity: share momentum along the normal
       const avgVx = (vx[i] + vx[j]) * 0.5;
@@ -200,7 +220,7 @@ export function resolveCollisions(sim: HorseSimulation): void {
       if (downI && stateTime[i] < 0.35) vx[j] += Math.sign(dx || 1) * COLLISION.FALL_IMPULSE * 0.5;
       if (downJ && stateTime[j] < 0.35) vx[i] -= Math.sign(dx || 1) * COLLISION.FALL_IMPULSE * 0.5;
 
-      // --- outcomes -------------------------------------------------------------
+      // --- outcomes (once per contact event) ------------------------------------
       if (downI !== downJ) {
         const runner = downI ? j : i;
         const fallen = downI ? i : j;
@@ -218,11 +238,19 @@ function playerMult(i: number): number {
 
 /** Runner hits a fallen horse at ground level. */
 function trip(sim: HorseSimulation, runner: number, fallen: number, impact: number): void {
-  if (!sim.canBeKnocked(runner)) return;
+  if (sim.eventCooldown[runner] > 0 || !sim.canBeKnocked(runner)) return;
   if (sim.y[runner] > 0.4) return; // landing on the very top of a pile is a graze, not a trip
-  const p = Math.min(0.95, (COLLISION.TRIP_BASE + COLLISION.TRIP_PER_IMPACT * impact) * playerMult(runner));
+  sim.eventCooldown[runner] = COLLISION.EVENT_COOLDOWN;
+  const gen = sim.chainGen[fallen] + 1;
+  let p = (COLLISION.TRIP_BASE + COLLISION.TRIP_PER_IMPACT * impact) * playerMult(runner);
+  p *= sim.accidentScale() * Math.pow(sim.tuning.chainDecay, gen - 1);
+  if (sim.layer[runner] === Layer.B) p *= COLLISION.TRIP_MULT_B;
+  if (p > 0.95) p = 0.95;
   const r = sim.rng.next();
-  if (r < p) sim.fall(runner, Math.sign(sim.x[runner] - sim.x[fallen]) || 1);
+  if (r < p) {
+    sim.fall(runner, Math.sign(sim.x[runner] - sim.x[fallen]) || 1, gen);
+    sim.tripFalls++;
+  }
   else if (r < p + 0.3) sim.stumble(runner);
 }
 
@@ -234,14 +262,16 @@ function upright(sim: HorseSimulation, i: number, j: number, rear: number, impac
   let p =
     COLLISION.STUMBLE_BASE + COLLISION.STUMBLE_PER_IMPACT * impact + COLLISION.STUMBLE_PER_NEIGHBOR * Math.max(0, crowd - 15);
   if (p > COLLISION.STUMBLE_MAX) p = COLLISION.STUMBLE_MAX;
+  p *= sim.accidentScale();
   // the rear (hitting) horse is most at risk; a sideswipe can unsettle either
   const other = rear === i ? j : i;
   for (let v = 0; v < 2; v++) {
     const h = v === 0 ? rear : other;
+    if (sim.eventCooldown[h] > 0 || !sim.canBeKnocked(h)) continue;
+    sim.eventCooldown[h] = COLLISION.EVENT_COOLDOWN;
     const pv = (v === 0 ? p : p * 0.4) * playerMult(h);
-    if (!sim.canBeKnocked(h)) continue;
     if (sim.state[h] === HorseState.STUMBLE) {
-      if (impact > 1 && sim.rng.next() < COLLISION.STUMBLE_TO_FALL * playerMult(h)) sim.fall(h);
+      if (impact > 1 && sim.rng.next() < COLLISION.STUMBLE_TO_FALL * playerMult(h) * sim.accidentScale()) sim.fall(h, 0, 0);
     } else if (sim.rng.next() < pv) {
       sim.stumble(h);
     }

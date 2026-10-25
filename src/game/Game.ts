@@ -1,6 +1,7 @@
 import { Course } from '../data/Course';
 import { World } from '../render/World';
-import { QualityManager, type QualityState } from '../render/Quality';
+import { QualityManager } from '../render/Quality';
+import { FixedStepper } from './Loop';
 import { DebugOverlay, type DebugStats } from '../ui/DebugOverlay';
 import { FIELD, RACE, SIM } from './Config';
 import { HorseSimulation, HorseState, STATE_NAMES } from './HorseSimulation';
@@ -42,13 +43,13 @@ export class Game {
 
   phase: GamePhase = 'countdown';
   rank: number = FIELD.HORSES;
-  private acc = 0;
   private last = -1;
   private raf = 0;
   private running = false;
 
   // timing statistics (exponentially smoothed)
-  readonly timing = { simMsPerTick: 0, ticksPerFrame: 1, fps: 0, frameMs: 16, prepMs: 0, drawMs: 0 };
+  readonly timing = { simMsPerTick: 0, ticksPerFrame: 1, fps: 0, frameMs: 16, prepMs: 0, drawMs: 0, cpuMs: 0 };
+  private readonly stepper = new FixedStepper();
 
   constructor(
     container: HTMLElement,
@@ -63,16 +64,15 @@ export class Game {
     this.overtakes.update(this.sim);
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.quality = new QualityManager(
-      {
-        targetMs: 1000 / 55,
-        maxPixelRatio: opts.pixelRatio ?? dpr,
-        minPixelRatio: Math.min(dpr, 0.6),
-        fixed: opts.pixelRatio !== undefined,
-        initialLevel: opts.quality,
-      },
-      (q: QualityState) => this.world.applyQuality(q),
-    );
+    // phones/tablets start one level lower; the controller then adapts both ways
+    const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+    this.quality = new QualityManager({
+      maxPixelRatio: opts.pixelRatio ?? dpr,
+      minPixelRatio: Math.min(dpr, 0.6),
+      fixed: opts.pixelRatio !== undefined,
+      initialLevel: opts.quality ?? (coarse ? 1 : 2),
+    });
+    this.world.applyQuality(this.quality.state);
     this.debug = opts.debug ? new DebugOverlay(container) : null;
 
     window.addEventListener('resize', this.onResize);
@@ -91,7 +91,7 @@ export class Game {
       this.sim.step(this.controller.sample(this.sim));
       this.afterTick();
     }
-    this.acc = 0;
+    this.stepper.reset();
     return ticks > 0 ? (performance.now() - t0) / ticks : 0;
   }
 
@@ -116,14 +116,14 @@ export class Game {
     this.overtakes.update(this.sim);
     this.phase = 'countdown';
     this.rank = this.sim.n;
-    this.acc = 0;
+    this.stepper.reset();
   }
 
   private readonly onResize = () => this.world.resize();
   private readonly onVisibility = () => {
     // drop accumulated time while hidden so we never fast-forward on return
     this.last = -1;
-    this.acc = 0;
+    this.stepper.reset();
   };
 
   private readonly frame = (now: number) => {
@@ -139,21 +139,20 @@ export class Game {
       this.restart();
     }
 
+    // ---- apply quality changes decided last frame BEFORE rendering (resizing the canvas
+    //      after rendering would present an empty buffer for one frame) ----
+    const pendingQ = this.quality.takePending();
+    if (pendingQ) this.world.applyQuality(pendingQ);
+
     // ---- fixed-step simulation ----
-    this.acc += dt;
-    let steps = 0;
     let simMs = 0;
-    while (this.acc >= SIM.DT && steps < SIM.MAX_STEPS_PER_FRAME) {
+    const { steps, alpha } = this.stepper.advance(dt, () => {
       const intent = this.controller.sample(this.sim);
       const t0 = performance.now();
       this.sim.step(intent);
       simMs += performance.now() - t0;
       this.afterTick();
-      this.acc -= SIM.DT;
-      steps++;
-    }
-    if (steps === SIM.MAX_STEPS_PER_FRAME && this.acc > SIM.DT) this.acc = SIM.DT * 0.999; // drop backlog
-    const alpha = this.acc / SIM.DT;
+    });
 
     // ---- render ----
     this.world.render(alpha, dt);
@@ -167,7 +166,9 @@ export class Game {
     tm.fps = 1000 / Math.max(1, tm.frameMs);
     tm.prepMs += (this.world.prepMs - tm.prepMs) * k;
     tm.drawMs += (this.world.drawMs - tm.drawMs) * k;
-    if (frameMs > 0) this.quality.sample(frameMs, dt);
+    const cpuMs = simMs + this.world.prepMs + this.world.drawMs;
+    tm.cpuMs += (cpuMs - tm.cpuMs) * k;
+    if (frameMs > 0) this.quality.sample({ intervalMs: frameMs, cpuMs });
     if (this.debug) this.debug.update(this.collectStats(), dt);
   };
 
@@ -207,6 +208,10 @@ export class Game {
       renderFar: hs.far,
       renderCulled: hs.culled,
       renderNearR: this.world.horses.effectiveNear,
+      renderFarR: this.world.horses.effectiveFar,
+      instances: hs.instances,
+      cpuMs: this.timing.cpuMs,
+      refreshMs: this.quality.estimatedRefreshMs,
       renderMidR: this.world.horses.effectiveMid,
       triangles: hs.triangles,
       drawCalls: this.world.info.calls,

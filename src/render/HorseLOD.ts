@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Course } from '../data/Course';
-import { Rng, deriveSeed } from '../data/Seed';
+import { Rng, deriveSeed, fmix32 } from '../data/Seed';
 import { FIELD, HORSE, SIM } from '../game/Config';
 import { HorseState, type HorseSimulation } from '../game/HorseSimulation';
 import { BODY_PIVOT_Y, buildHorseFar, buildHorseMid, buildHorseNear, buildShadowGeometry, triangleCount } from './HorseGeometry';
@@ -17,6 +17,10 @@ export interface RenderLodSettings {
   farDist: number;
   nearCap: number;
   midCap: number;
+  /** max far-tier instances (closest kept) */
+  farCap: number;
+  /** fraction of far-tier horses drawn beyond midDist (stable per-id thinning) */
+  farKeep: number;
   shadows: boolean;
 }
 
@@ -26,6 +30,8 @@ export const DEFAULT_LOD: RenderLodSettings = {
   farDist: 1250,
   nearCap: 160,
   midCap: 1400,
+  farCap: 10000,
+  farKeep: 1,
   shadows: true,
 };
 
@@ -97,6 +103,8 @@ export interface HorseRenderStats {
   far: number;
   culled: number;
   triangles: number;
+  /** instances uploaded this frame (near + mid + far) */
+  instances: number;
 }
 
 const SILKS = [
@@ -113,7 +121,7 @@ export class HorseRenderer {
   private readonly mid: Tier;
   private readonly far: Tier;
   readonly settings: RenderLodSettings = { ...DEFAULT_LOD };
-  readonly stats: HorseRenderStats = { near: 0, mid: 0, far: 0, culled: 0, triangles: 0 };
+  readonly stats: HorseRenderStats = { near: 0, mid: 0, far: 0, culled: 0, triangles: 0, instances: 0 };
 
   private readonly frustum = new THREE.Frustum();
   private readonly projScreen = new THREE.Matrix4();
@@ -125,10 +133,13 @@ export class HorseRenderer {
   private readonly visZ: Float32Array;
   private readonly visH: Float32Array;
   private readonly visD: Float32Array;
-  /** 1 m distance bins for the tier budget */
-  private readonly hist = new Int32Array(256);
+  /** 1 m distance bins for the tier budgets */
+  private readonly hist = new Int32Array(1301);
+  /** stable per-horse key in [0,1) for far-tier thinning */
+  private readonly thinKey: Float32Array;
   effectiveNear = 0;
   effectiveMid = 0;
+  effectiveFar = 0;
   /** interpolated world pose of the player (for camera follow) */
   readonly playerPose = { x: 0, y: 0, z: 0, heading: 0, yaw: 0, speed: 0 };
 
@@ -143,6 +154,8 @@ export class HorseRenderer {
     this.visZ = new Float32Array(n);
     this.visH = new Float32Array(n);
     this.visD = new Float32Array(n);
+    this.thinKey = new Float32Array(n);
+    for (let i = 0; i < n; i++) this.thinKey[i] = fmix32(i + 1) / 4294967296;
     this.near = new Tier(Math.min(n, 512), buildHorseNear(), createHorseMaterial({ colors: this.colorTexture, animated: true }), true);
     this.mid = new Tier(Math.min(n, 4096), buildHorseMid(), createHorseMaterial({ colors: this.colorTexture, animated: true }), true);
     this.far = new Tier(n, buildHorseFar(), createHorseMaterial({ colors: this.colorTexture, animated: false, scale: 1.12 }), false);
@@ -228,6 +241,16 @@ export class HorseRenderer {
     const hist = this.hist;
     hist.fill(0);
     const binMax = hist.length - 1;
+    const thinKey = this.thinKey;
+    const keep = set.farKeep;
+    const midSetting = set.midDist;
+    // camera -> player segment (for hiding occluders)
+    const pp = this.playerPose;
+    let segX = pp.x - camX;
+    let segZ = pp.z - camZ;
+    const segLen = Math.hypot(segX, segZ) || 1;
+    segX /= segLen;
+    segZ /= segLen;
     let nVis = 0;
     for (let i = 0; i < sim.n; i++) {
       const x = prevX[i] + (xs[i] - prevX[i]) * alpha;
@@ -255,10 +278,26 @@ export class HorseRenderer {
         continue;
       }
       const d = Math.sqrt(d2);
-      // horses brushing past the lens would fill the screen: hide them (never the player)
-      if (d < 3.5 && i !== FIELD.PLAYER) {
-        culled++;
-        continue;
+      if (i !== FIELD.PLAYER) {
+        // stable thinning of the far field on low quality levels
+        if (d > midSetting && thinKey[i] >= keep) {
+          culled++;
+          continue;
+        }
+        // horses brushing past the lens, or standing between the camera and the player,
+        // would hide the gaps the player is steering for: hide them
+        if (d < 3.5) {
+          culled++;
+          continue;
+        }
+        const t = dx * segX + dz * segZ; // along camera->player, in metres
+        if (t > 0 && t < segLen - 2.6) {
+          const perp = Math.abs(dx * segZ - dz * segX);
+          if (perp < 1.5) {
+            culled++;
+            continue;
+          }
+        }
       }
       vis[nVis] = i;
       vwx[nVis] = wx;
@@ -270,20 +309,28 @@ export class HorseRenderer {
       hist[bin]++;
     }
 
-    // ---- budget: shrink tier radii so the CLOSEST horses get the detailed meshes ----
+    // ---- budgets: shrink tier radii so the CLOSEST horses get the detailed meshes, and the
+    //      far tier never exceeds its instance cap (the farthest are dropped) ----
     let nearR = set.nearDist;
     let midR = set.midDist;
+    let farR = set.farDist;
     {
       let cum = 0;
       let nearDone = false;
+      let midDone = false;
+      const total = set.nearCap + set.midCap + set.farCap;
       for (let b = 0; b <= binMax; b++) {
         const next = cum + hist[b];
         if (!nearDone && (b >= set.nearDist || next > set.nearCap - 1)) {
           nearR = Math.min(set.nearDist, b);
           nearDone = true;
         }
-        if (b >= set.midDist || next > set.nearCap + set.midCap - 1) {
+        if (!midDone && (b >= set.midDist || next > set.nearCap + set.midCap - 1)) {
           midR = Math.min(set.midDist, b);
+          midDone = true;
+        }
+        if (next > total) {
+          farR = b;
           break;
         }
         cum = next;
@@ -291,6 +338,7 @@ export class HorseRenderer {
     }
     this.effectiveNear = nearR;
     this.effectiveMid = midR;
+    this.effectiveFar = farR;
 
     // ---- pass 2: tier assignment + pose ----
     for (let v = 0; v < nVis; v++) {
@@ -301,7 +349,11 @@ export class HorseRenderer {
       let tier: Tier;
       if (i === FIELD.PLAYER || d < nearR) tier = near;
       else if (d < midR) tier = mid;
-      else tier = far;
+      else if (d < farR) tier = far;
+      else {
+        culled++;
+        continue;
+      }
       if (tier.count >= tier.capacity) tier = tier === near ? mid : far;
       if (tier.count >= tier.capacity) tier = far;
       if (tier.count >= tier.capacity) continue;
@@ -373,6 +425,7 @@ export class HorseRenderer {
     s.mid = mid.count;
     s.far = far.count;
     s.culled = culled;
+    s.instances = near.count + mid.count + far.count;
     s.triangles =
       near.count * near.trisPerInstance + mid.count * mid.trisPerInstance + far.count * far.trisPerInstance;
   }

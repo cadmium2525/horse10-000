@@ -84,8 +84,9 @@ export class Input {
   }
 
   // Minimal touch scheme (full mobile UI is Phase 1): left half drag = steer,
-  // right half tap = jump, right half hold > 250 ms = dash.
-  private dashTimer = 0;
+  // centre-right strip (50–75 % width) hold = dash, far right (75–100 %) tap = jump.
+  // Jump and dash are separate zones so dashing never forces a jump.
+  private dashPointer: number | null = null;
   private readonly onPointerDown = (e: PointerEvent) => {
     if (e.pointerType === 'mouse') return;
     const w = this.target.clientWidth;
@@ -93,10 +94,11 @@ export class Input {
       this.touchId = e.pointerId;
       this.touchStartX = e.clientX;
       this.touchSteer = 0;
+    } else if (e.clientX < w * 0.75) {
+      this.dashPointer = e.pointerId;
+      this.dash = true;
     } else {
       this.jumpLatched = true;
-      window.clearTimeout(this.dashTimer);
-      this.dashTimer = window.setTimeout(() => (this.dash = true), 250);
     }
   };
   private readonly onPointerMove = (e: PointerEvent) => {
@@ -108,8 +110,8 @@ export class Input {
     if (e.pointerId === this.touchId) {
       this.touchId = null;
       this.touchSteer = null;
-    } else if (e.pointerType !== 'mouse') {
-      window.clearTimeout(this.dashTimer);
+    } else if (e.pointerId === this.dashPointer) {
+      this.dashPointer = null;
       this.dash = false;
     }
   };

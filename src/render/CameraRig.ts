@@ -23,9 +23,11 @@ export class CameraRig {
   /** 0..1 additional pull-back (e.g. while airborne) */
   private pull = 0;
 
-  distance = 10;
-  height = 4.9;
-  lookAhead = 16;
+  // high enough to read the gaps between the horses ahead (occluders on the
+  // camera->player line are hidden by the renderer)
+  distance = 10.5;
+  height = 6.2;
+  lookAhead = 18;
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(60, aspect, 0.3, 3200);

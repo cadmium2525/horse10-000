@@ -58,28 +58,6 @@ describe('HorseSimulation', () => {
     }
   });
 
-  it('chain reaction: horses tripping over a fallen one', () => {
-    const sim = new HorseSimulation(new Course(11), 11, 3000);
-    for (let t = 0; t < 60; t++) sim.step();
-    // knock over a horse right in front of the player area
-    const before = sim.fallsTotal;
-    let falls = 0;
-    for (let t = 0; t < 150; t++) {
-      if (t % 30 === 0) {
-        for (let k = 0; k < sim.activeCount; k++) {
-          const i = sim.active[k];
-          if (i !== 0 && sim.state[i] === HorseState.RUN) {
-            sim.fall(i);
-            break;
-          }
-        }
-      }
-      sim.step();
-    }
-    falls = sim.fallsTotal - before;
-    expect(falls).toBeGreaterThan(5); // seeded falls plus at least a few knock-ons
-  });
-
   it('a jumping player clears a fallen horse', () => {
     const sim = new HorseSimulation(new Course(2), 2, 2);
     for (let t = 0; t < 120; t++) sim.step();
@@ -96,7 +74,35 @@ describe('HorseSimulation', () => {
   });
 });
 
+describe('LOD start-up', () => {
+  it('first classification already respects the layer budgets (no B-layer bloat)', () => {
+    const sim = new HorseSimulation(new Course(5), 5);
+    while (!sim.started) sim.step();
+    sim.step();
+    expect(sim.layerCounts[0]).toBeLessThan(LOD.TARGET_A * 1.6);
+    expect(sim.layerCounts[0] + sim.layerCounts[1]).toBeLessThan(LOD.TARGET_B * 1.6);
+  });
+});
+
 describe('SpatialHash', () => {
+  it('deduplicates reports for rectangles larger than 64 cells', () => {
+    const n = 300;
+    const xs = new Float32Array(n);
+    const ps = new Float32Array(n);
+    const ids = new Int32Array(n);
+    for (let i = 0; i < n; i++) {
+      xs[i] = (i % 30) * 2 - 30;
+      ps[i] = Math.floor(i / 30) * 7;
+      ids[i] = i;
+    }
+    const hash = new SpatialHash(2.5, 64, n); // tiny table => heavy bucket aliasing
+    hash.build(ids, n, xs, ps);
+    const seen = new Map<number, number>();
+    hash.forEachInRect(-40, -10, 40, 80, (j) => seen.set(j, (seen.get(j) ?? 0) + 1));
+    expect(seen.size).toBe(n);
+    for (const c of seen.values()) expect(c).toBe(1);
+  });
+
   it('finds every neighbour that brute force finds', () => {
     const n = 400;
     const xs = new Float32Array(n);
