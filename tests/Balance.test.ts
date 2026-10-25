@@ -47,3 +47,50 @@ describe('balance / reachability', () => {
     }, 60000);
   }
 });
+
+describe('Phase 1 race feel (good-player bot)', () => {
+  for (const seed of [1234, 9]) {
+    it(`seed ${seed}: early big pile, big rank swing by 30 s, top-100 finish`, async () => {
+      const { AutoBot } = await import('../src/game/PlayerController');
+      const { computeRank } = await import('../src/game/Race');
+      const { HorseState } = await import('../src/game/HorseSimulation');
+      const sim = new HorseSimulation(new Course(seed), seed);
+      const bot = new AutoBot();
+      let firstPile = -1;
+      let rank30 = 0;
+      for (let t = 0; t < 30 * 130 && sim.finishTime[FIELD.PLAYER] < 0; t++) {
+        sim.step(bot.decide(sim));
+        if (firstPile < 0 && sim.started && t % 15 === 0) {
+          // a pile of ≥ 10 downed horses in view ahead of the player
+          let down = 0;
+          for (let i = 1; i < sim.n; i++) {
+            if (sim.state[i] !== HorseState.FALL) continue;
+            const d = sim.progress[i] - sim.progress[0];
+            if (d > -10 && d < 120 && Math.abs(sim.x[i] - sim.x[0]) < 60) down++;
+          }
+          if (down >= 10) firstPile = sim.raceTime;
+        }
+        if (rank30 === 0 && sim.raceTime >= 30) rank30 = computeRank(sim, FIELD.PLAYER);
+      }
+      const finalRank = computeRank(sim, FIELD.PLAYER);
+      (globalThis as { process?: { stderr: { write(s: string): void } } }).process?.stderr.write(
+        `phase1 seed ${seed}: first pile ${firstPile.toFixed(1)} s, rank@30s ${rank30}, finish ${sim.finishTime[0].toFixed(1)} s rank ${finalRank}\n`,
+      );
+      expect(firstPile).toBeGreaterThanOrEqual(0);
+      expect(firstPile).toBeLessThanOrEqual(15);
+      expect(10000 - rank30).toBeGreaterThanOrEqual(2000);
+      expect(finalRank).toBeLessThanOrEqual(100);
+    }, 120000);
+  }
+});
+
+describe('skill matters', () => {
+  it('a passive player (no steering, no jumps, no dash) ends far from the top', () => {
+    const seed = 1234;
+    const sim = new HorseSimulation(new Course(seed), seed);
+    for (let t = 0; t < 30 * 125 && sim.finishTime[FIELD.PLAYER] < 0; t++) sim.step();
+    let ahead = 0;
+    for (let i = 1; i < sim.n; i++) if (sim.finishTime[i] >= 0 && (sim.finishTime[FIELD.PLAYER] < 0 || sim.finishTime[i] < sim.finishTime[FIELD.PLAYER])) ahead++;
+    expect(ahead + 1).toBeGreaterThan(1000);
+  }, 120000);
+});

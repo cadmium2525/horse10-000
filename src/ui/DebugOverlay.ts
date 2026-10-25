@@ -21,6 +21,8 @@ export interface DebugStats {
   renderNearR: number;
   renderFarR: number;
   instances: number;
+  impostors: number;
+  phase: string;
   cpuMs: number;
   refreshMs: number;
   renderMidR: number;
@@ -63,9 +65,9 @@ export class DebugOverlay {
       `sim ${f(s.simMsPerTick, 2)}ms/tick x${f(s.simTicksPerFrame, 2)}  prep ${f(s.prepMs, 2)}ms  draw ${f(s.drawMs, 2)}ms\n` +
       `sim LOD  A ${s.layerA}  B ${s.layerB}  C ${s.layerC}  (rA ${f(s.radiusA)}m rB ${f(s.radiusB)}m)\n` +
       `render   near ${s.renderNear}  mid ${s.renderMid}  far ${s.renderFar}  culled ${s.renderCulled}  (${f(s.renderNearR, 0)}/${f(s.renderMidR, 0)}/${f(s.renderFarR, 0)}m)\n` +
-      `tris ${(s.triangles / 1000).toFixed(0)}k  inst ${s.instances}  calls ${s.drawCalls}  contacts ${s.contacts}  down ${s.down}  falls ${s.falls}\n` +
+      `tris ${(s.triangles / 1000).toFixed(0)}k  inst ${s.instances}  pts ${s.impostors}  calls ${s.drawCalls}  contacts ${s.contacts}  down ${s.down}  falls ${s.falls}\n` +
       `rank ${s.rank.toLocaleString()} / 10,000  passed ${s.overtakes}  ${s.playerState}  ${f(s.speed)}m/s  dash ${f(s.dash * 100, 0)}%\n` +
-      `t ${f(s.raceTime)}s  progress ${f(s.progress, 0)}m  remain ${f(s.remaining, 0)}m  seed ${s.seed}`;
+      `t ${f(s.raceTime)}s  progress ${f(s.progress, 0)}m  remain ${f(s.remaining, 0)}m  seed ${s.seed}  ${s.phase}`;
   }
 
   dispose(): void {

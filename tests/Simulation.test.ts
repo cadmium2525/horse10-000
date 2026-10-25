@@ -60,7 +60,7 @@ describe('HorseSimulation', () => {
 
   it('a jumping player clears a fallen horse', () => {
     const sim = new HorseSimulation(new Course(2), 2, 2);
-    for (let t = 0; t < 120; t++) sim.step();
+    while (sim.raceTime < 3) sim.step();
     // put NPC 1 lying 7 m ahead of the player in the same lane
     sim.x[1] = sim.x[0];
     sim.progress[1] = sim.progress[0] + 7;
@@ -135,7 +135,7 @@ describe('jump timing', () => {
     let trips = 0;
     for (let seed = 1; seed <= 10; seed++) {
       const sim = new HorseSimulation(new Course(seed), seed, 2);
-      for (let t = 0; t < 120; t++) sim.step();
+      while (sim.raceTime < 3) sim.step();
       sim.x[1] = sim.x[0];
       sim.progress[1] = sim.progress[0] + 7;
       sim.speed[1] = 0;

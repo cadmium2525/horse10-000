@@ -58,6 +58,50 @@ export class SpatialHash {
     return this.count;
   }
 
+  /** shared result buffer of `query()` (valid until the next query) */
+  result = new Int32Array(256);
+
+  /**
+   * Allocation-free variant of forEachInRect: fills `this.result` and returns the count.
+   * Same guarantees (each id at most once, may include ids slightly outside the rect).
+   */
+  query(x0: number, p0: number, x1: number, p1: number): number {
+    const inv = this.inv;
+    const cx0 = Math.floor(x0 * inv);
+    const cx1 = Math.floor(x1 * inv);
+    const cy0 = Math.floor(p0 * inv);
+    const cy1 = Math.floor(p1 * inv);
+    const cells = (cx1 - cx0 + 1) * (cy1 - cy0 + 1);
+    if (cells > this.visited.length) this.visited = new Int32Array(Math.min(this.mask + 1, cells * 2));
+    let nVisited = 0;
+    const visited = this.visited;
+    let n = 0;
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const b = this.bucket(cx, cy);
+        let dup = false;
+        for (let v = 0; v < nVisited; v++) {
+          if (visited[v] === b) {
+            dup = true;
+            break;
+          }
+        }
+        if (dup) continue;
+        visited[nVisited++] = b;
+        const end = this.cellStart[b + 1];
+        for (let e = this.cellStart[b]; e < end; e++) {
+          if (n >= this.result.length) {
+            const grown = new Int32Array(this.result.length * 2);
+            grown.set(this.result);
+            this.result = grown;
+          }
+          this.result[n++] = this.entries[e];
+        }
+      }
+    }
+    return n;
+  }
+
   /**
    * Visit every inserted id whose cell overlaps the rectangle. May report ids slightly
    * outside the rectangle (cell granularity / bucket aliasing) — callers filter by distance.
@@ -125,15 +169,18 @@ export function resolveCollisions(sim: HorseSimulation): void {
     const i = sim.active[k];
     // gather neighbours with id > i (each pair handled once, deterministic order)
     let nn = 0;
-    hash.forEachInRect(x[i] - reachX, progress[i] - reach, x[i] + reachX, progress[i] + reach, (j) => {
-      if (j <= i) return;
+    const found = hash.query(x[i] - reachX, progress[i] - reach, x[i] + reachX, progress[i] + reach);
+    const res = hash.result;
+    for (let r = 0; r < found; r++) {
+      const j = res[r];
+      if (j <= i) continue;
       if (nn >= neighborBuf.length) {
         const grown = new Int32Array(neighborBuf.length * 2);
         grown.set(neighborBuf);
         neighborBuf = grown;
       }
       neighborBuf[nn++] = j;
-    });
+    }
     // bucket iteration order is deterministic, but sort to make it independent of hashing
     if (nn > 1) sortSmall(neighborBuf, nn);
 
@@ -159,6 +206,9 @@ export function resolveCollisions(sim: HorseSimulation): void {
       const topI = y[i] + (downI ? HORSE.FALLEN_HEIGHT : HORSE.HEIGHT);
       const topJ = y[j] + (downJ ? HORSE.FALLEN_HEIGHT : HORSE.HEIGHT);
       if (y[i] >= topJ || y[j] >= topI) continue;
+
+      // a downed horse resting on top of another (pile) is supported, not pushed apart
+      if (downI && downJ && Math.abs(y[i] - y[j]) > 0.3) continue;
 
       sim.contactsThisTick++;
       const d = Math.sqrt(q2);
@@ -208,7 +258,11 @@ export function resolveCollisions(sim: HorseSimulation): void {
       const latImpact = Math.abs(vx[i] - vx[j]) * Math.abs(nx);
       const impact = closing + latImpact;
       if (closing > 0) {
-        speed[rear] -= closing * 0.6;
+        // brushing past a downed horse (no trip) mostly deflects sideways instead of stopping;
+        // the player shoulders through NPCs (they are shoved aside) rather than stopping dead
+        const playerRear = rear === FIELD.PLAYER && state[front] !== HorseState.FALL;
+        speed[rear] -= closing * (downI !== downJ ? 0.2 : playerRear ? PLAYER.SHOULDER_LOSS : 0.6);
+        if (playerRear) vx[front] += (x[front] >= x[rear] ? 1 : -1) * PLAYER.SHOULDER_SHOVE;
         if (state[front] !== HorseState.FALL) speed[front] += closing * 0.15;
       }
       // lateral velocity: share momentum along the normal
@@ -238,12 +292,25 @@ function playerMult(i: number): number {
 
 /** Runner hits a fallen horse at ground level. */
 function trip(sim: HorseSimulation, runner: number, fallen: number, impact: number): void {
-  if (sim.eventCooldown[runner] > 0 || !sim.canBeKnocked(runner)) return;
-  if (sim.y[runner] > 0.4) return; // landing on the very top of a pile is a graze, not a trip
+  if (!sim.canBeKnocked(runner)) return;
+  // coming down onto a downed horse after a jump = failed landing (design §4)
+  if (sim.y[runner] > 0.05 && sim.vy[runner] < 0) {
+    if (sim.eventCooldown[runner] > 0) return;
+    sim.eventCooldown[runner] = COLLISION.EVENT_COOLDOWN;
+    const pl = (runner === FIELD.PLAYER ? COLLISION.LANDING_FAIL : COLLISION.LANDING_FAIL_NPC) * Math.pow(sim.tuning.chainDecay, sim.chainGen[fallen]);
+    if (sim.rng.next() < pl) {
+      sim.fall(runner, Math.sign(sim.x[runner] - sim.x[fallen]) || 1, sim.chainGen[fallen] + 1);
+      sim.tripFalls++;
+    }
+    return;
+  }
+  if (sim.eventCooldown[runner] > 0) return;
+  if (sim.y[runner] > 0.4) return; // rising past the edge of a pile is a graze, not a trip
   sim.eventCooldown[runner] = COLLISION.EVENT_COOLDOWN;
   const gen = sim.chainGen[fallen] + 1;
   let p = (COLLISION.TRIP_BASE + COLLISION.TRIP_PER_IMPACT * impact) * playerMult(runner);
   p *= sim.accidentScale() * Math.pow(sim.tuning.chainDecay, gen - 1);
+  if (runner !== FIELD.PLAYER && sim.inPlayerSafeBox(runner)) p *= COLLISION.SAFE_TRIP_MULT;
   if (sim.layer[runner] === Layer.B) p *= COLLISION.TRIP_MULT_B;
   if (p > 0.95) p = 0.95;
   const r = sim.rng.next();
@@ -257,7 +324,7 @@ function trip(sim: HorseSimulation, runner: number, fallen: number, impact: numb
 /** Contact between two upright horses. */
 function upright(sim: HorseSimulation, i: number, j: number, rear: number, impact: number, detailed: boolean): void {
   if (!detailed) return; // layer B: separation only
-  if (impact < 0.4) return;
+  if (impact < COLLISION.STUMBLE_MIN_IMPACT) return;
   const crowd = sim.densityAt(sim.x[i], sim.progress[i]);
   let p =
     COLLISION.STUMBLE_BASE + COLLISION.STUMBLE_PER_IMPACT * impact + COLLISION.STUMBLE_PER_NEIGHBOR * Math.max(0, crowd - 15);
@@ -271,7 +338,9 @@ function upright(sim: HorseSimulation, i: number, j: number, rear: number, impac
     sim.eventCooldown[h] = COLLISION.EVENT_COOLDOWN;
     const pv = (v === 0 ? p : p * 0.4) * playerMult(h);
     if (sim.state[h] === HorseState.STUMBLE) {
-      if (impact > 1 && sim.rng.next() < COLLISION.STUMBLE_TO_FALL * playerMult(h) * sim.accidentScale()) sim.fall(h, 0, 0);
+      // NPC-vs-NPC bumps never put a horse down right in front of the player (fairness)
+      const shielded = h !== FIELD.PLAYER && i !== FIELD.PLAYER && j !== FIELD.PLAYER && sim.inPlayerSafeBox(h);
+      if (!shielded && impact > 1 && sim.rng.next() < COLLISION.STUMBLE_TO_FALL * playerMult(h) * sim.accidentScale()) sim.fall(h, 0, 0);
     } else if (sim.rng.next() < pv) {
       sim.stumble(h);
     }

@@ -89,6 +89,11 @@ export class HorseSimulation {
   readonly chainGen: Uint8Array;
   /** seconds until this horse may be rolled for another accident */
   readonly eventCooldown: Float32Array;
+  /**
+   * resting height of a downed horse: 0 on the turf, > 0 when it landed on other downed
+   * horses ("horse pile", design §4). Low piles can be jumped, tall ones must be avoided.
+   */
+  readonly groundY: Float32Array;
 
   // --- presentation helpers (deterministic, but not used by the rules) ---------------
   readonly gaitPhase: Float32Array;
@@ -127,6 +132,16 @@ export class HorseSimulation {
   readonly followCap: Float32Array;
   /** 1 when the car-following cap is restricting this horse (used to trigger lane changes) */
   readonly blocked: Uint8Array;
+  /**
+   * position in a queue of slow horses: 1 = directly behind a downed/stumbling or very slow
+   * horse, 2 = behind such a follower, ... (0 = not queued). Braking only chains to depth 2;
+   * deeper horses keep rolling and squeeze round, so standing jams cannot form.
+   */
+  readonly queueDepth: Uint8Array;
+  /** seconds a queued horse has been (nearly) stopped — impatience triggers a squeeze */
+  readonly queueTime: Float32Array;
+  /** the downed/slow horse a queued horse is detouring around (-1 = none) */
+  readonly detourFrom: Int32Array;
 
   // --- player-only state ---------------------------------------------------------------
   dashGauge = 1;
@@ -143,6 +158,8 @@ export class HorseSimulation {
   fallsTotal = 0;
   /** falls caused by tripping over another fallen horse (chain reactions, layers A/B) */
   tripFalls = 0;
+  /** NPC hops over downed horses (stat) */
+  hops = 0;
   /** largest positional correction applied by contact resolution this tick (m) */
   maxCorrectionThisTick = 0;
   /** per-horse correction used this tick (collision budget) */
@@ -182,6 +199,7 @@ export class HorseSimulation {
     this.finishTime = new Float32Array(n).fill(-1);
     this.chainGen = new Uint8Array(n);
     this.eventCooldown = new Float32Array(n);
+    this.groundY = new Float32Array(n);
     this.gaitPhase = new Float32Array(n);
     this.layer = new Uint8Array(n).fill(Layer.C);
     this.layerAge = new Uint8Array(n);
@@ -204,6 +222,9 @@ export class HorseSimulation {
     this.laneX = new Float32Array(n);
     this.followCap = new Float32Array(n).fill(Infinity);
     this.blocked = new Uint8Array(n);
+    this.queueDepth = new Uint8Array(n);
+    this.detourFrom = new Int32Array(n).fill(-1);
+    this.queueTime = new Float32Array(n);
 
     this.hash = new SpatialHash(COLLISION.CELL, 4096, n);
     this.setupField();
@@ -221,21 +242,32 @@ export class HorseSimulation {
     const rng = new Rng(deriveSeed(this.seed, 'field'));
     const perRow = Math.floor((FIELD.GRID_HALF_WIDTH * 2) / FIELD.GRID_LATERAL_SPACING) + 1;
     const npc = this.n - 1;
-    const rows = Math.ceil(npc / perRow);
+    // walk grid slots row by row; behind the first rows, slots inside the "streak" corridors
+    // stay empty (design: 中団に隙間の筋 — readable lines a skilled player can run through)
+    const xs: number[] = [];
+    const rowsOf: number[] = [];
+    for (let row = 0; xs.length < npc; row++) {
+      const stagger = row & 1 ? FIELD.GRID_LATERAL_SPACING * 0.5 : 0;
+      for (let col = 0; col < perRow && xs.length < npc; col++) {
+        let x = -FIELD.GRID_HALF_WIDTH + col * FIELD.GRID_LATERAL_SPACING + stagger;
+        if (x > FIELD.GRID_HALF_WIDTH) x -= FIELD.GRID_LATERAL_SPACING;
+        if (row >= FIELD.CORRIDOR_FROM_ROW && inCorridor(x)) continue;
+        xs.push(x);
+        rowsOf.push(row);
+      }
+    }
+    const rows = rowsOf[rowsOf.length - 1] + 1;
     for (let k = 0; k < npc; k++) {
       const i = k + 1;
-      const row = Math.floor(k / perRow);
-      const col = k % perRow;
-      const stagger = row & 1 ? FIELD.GRID_LATERAL_SPACING * 0.5 : 0;
-      let x = -FIELD.GRID_HALF_WIDTH + col * FIELD.GRID_LATERAL_SPACING + stagger;
+      const row = rowsOf[k];
+      let x = xs[k];
       x += rng.range(-FIELD.GRID_JITTER, FIELD.GRID_JITTER);
-      if (x > FIELD.GRID_HALF_WIDTH) x -= FIELD.GRID_LATERAL_SPACING;
       // "all horses start with a slight progress difference" -> unique-ish progress per horse
       const p = -row * FIELD.GRID_ROW_SPACING + rng.range(-FIELD.GRID_PROGRESS_JITTER, FIELD.GRID_PROGRESS_JITTER);
       this.x[i] = x;
       this.progress[i] = p;
       this.laneTarget[i] = x;
-      // a weak correlation: front rows are slightly faster on average
+      // front rows are faster on average
       const frontBias = rows > 1 ? 1 - row / (rows - 1) : 1;
       const fb = HORSE.FRONT_BIAS;
       this.baseSpeed[i] =
@@ -294,6 +326,7 @@ export class HorseSimulation {
 
     if (!this.started) {
       for (let i = 0; i < this.n; i++) this.gaitPhase[i] += SIM.DT * 2; // restless idle
+      this.warmUp();
       return;
     }
 
@@ -317,9 +350,32 @@ export class HorseSimulation {
     }
 
     this.computeFollowCaps();
+    this.planDetours();
     this.integrate();
     resolveCollisions(this);
     this.checkFinish();
+  }
+
+  /**
+   * Countdown: run the per-tick pipeline on the standing grid (no integration, no RNG use)
+   * so the JIT has optimised it before the gates open — otherwise the first second of the
+   * race shows 10–30 ms spikes. Horses are stationary and non-overlapping, so this changes
+   * no state that the race depends on except caches that are rebuilt every tick anyway.
+   */
+  private warmUp(): void {
+    this.classifyLayers();
+    this.buildDensity();
+    this.sortOrder();
+    this.buildLanes();
+    this.computeFollowCaps();
+    resolveCollisions(this);
+    // leave per-horse decision state exactly as at construction
+    this.followCap.fill(Infinity);
+    this.blocked.fill(0);
+    this.queueDepth.fill(0);
+    this.queueTime.fill(0);
+    this.detourFrom.fill(-1);
+    this.targetSpeed.fill(0);
   }
 
   /** Lightweight checksum of the full state (used by determinism tests). */
@@ -488,10 +544,9 @@ export class HorseSimulation {
     }
   }
 
-  /** true if no other horse occupies the slot (x, p ± LANE_CHANGE_CLEAR) — lane lists, O(log n) */
-  slotFree(x: number, p: number, exclude: number): boolean {
+  /** true if no other horse occupies the slot [p - behind, p + ahead] at x — lane lists, O(log n) */
+  slotFree(x: number, p: number, exclude: number, behind: number = LOD.LANE_CHANGE_CLEAR, ahead: number = LOD.LANE_CHANGE_CLEAR): boolean {
     const w = HORSE.HALF_WIDTH * 2;
-    const clear = LOD.LANE_CHANGE_CLEAR;
     const l0 = this.laneIndex(x - w);
     const l1 = this.laneIndex(x + w);
     for (let l = l0; l <= l1; l++) {
@@ -500,14 +555,14 @@ export class HorseSimulation {
       // first index with progress <= p + clear (descending list)
       let lo = a;
       let hi = b;
-      const top = p + clear;
+      const top = p + ahead;
       while (lo < hi) {
         const mid = (lo + hi) >> 1;
         if (this.laneP[mid] > top) lo = mid + 1;
         else hi = mid;
       }
       for (let k = lo; k < b; k++) {
-        if (this.laneP[k] < p - clear) break;
+        if (this.laneP[k] < p - behind) break;
         const j = this.laneList[k];
         if (j !== exclude && Math.abs(this.x[j] - x) < w) return false;
       }
@@ -515,18 +570,87 @@ export class HorseSimulation {
     return true;
   }
 
-  /** Try a one-body lane change towards `pref`, else the other side. */
-  private tryLaneChange(i: number, pref: number): void {
+  /**
+   * Try a lane change of one (then, if `wide`, two) body widths towards `pref`, else the
+   * other side. Returns true if a free slot was found.
+   */
+  private tryLaneChange(i: number, pref: number, wide = false): boolean {
     const x = this.x[i];
     const p = this.progress[i];
     const step = HORSE.HALF_WIDTH * 2;
     const half = this.course.width * 0.5 - 1;
-    for (const side of [pref, -pref]) {
-      const nx = x + side * step;
-      if (nx < -half || nx > half) continue;
-      if (this.slotFree(nx, p, i)) {
-        this.laneTarget[i] = nx;
-        return;
+    const maxK = wide ? 2 : 1;
+    for (let k = 1; k <= maxK; k++) {
+      for (let s = 0; s < 2; s++) {
+        const side = s === 0 ? pref : -pref;
+        const nx = x + side * step * k;
+        if (nx < -half || nx > half) continue;
+        // ordinary lane changes keep the streak corridors open; detours may use them
+        if (!wide && inCorridor(nx)) continue;
+        if (wide ? this.slotFree(nx, p, i, 1.2, 2.4) : this.slotFree(nx, p, i)) {
+          this.laneTarget[i] = nx;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Detours (design §4: resolve blockages). Horses queued behind a downed horse steer round
+   * it immediately (up to two body widths, every tick until a slot is found) instead of
+   * waiting; ordinary "stuck behind a slower horse" cases re-try every few ticks.
+   */
+  private planDetours(): void {
+    const { blocked, laneTarget, x, desiredVx, layer, state } = this;
+    const tick = this.tick;
+    for (let i = 1; i < this.n; i++) {
+      const b = blocked[i];
+      if (b === 0) continue;
+      const st = state[i];
+      if (st !== HorseState.RUN && st !== HorseState.AVOID) continue;
+      const settled = Math.abs(laneTarget[i] - x[i]) < 0.2;
+      if (b === 2) {
+        // near field: a horse arriving at speed may simply hop over a low downed horse
+        const lead = this.detourFrom[i];
+        if (
+          layer[i] !== Layer.C &&
+          lead >= 0 &&
+          state[lead] === HorseState.FALL &&
+          this.y[i] <= 0 &&
+          this.speed[i] > 7 &&
+          this.eventCooldown[i] <= 0
+        ) {
+          const dp = this.progress[lead] - this.progress[i];
+          if (dp > 2.2 && dp < 5.5) {
+            this.eventCooldown[i] = COLLISION.EVENT_COOLDOWN;
+            if (this.rng.next() < this.skill[i] * LOD.NPC_HOP_CHANCE * this.tuning.avoidSkill) {
+              this.vy[i] = LOD.NPC_HOP_VY;
+              this.y[i] = 0.01;
+              this.hops++;
+              continue;
+            }
+          }
+        }
+        if (settled && (i + tick) % 3 === 0) {
+          const lead = this.detourFrom[i];
+          const d = lead >= 0 ? x[i] - x[lead] : 0;
+          const pref = d > 0.05 ? 1 : d < -0.05 ? -1 : i & 1 ? 1 : -1;
+          if (
+            !this.tryLaneChange(i, pref, true) &&
+            layer[i] !== Layer.C &&
+            (this.queueDepth[i] > 2 || this.queueTime[i] > LOD.QUEUE_PATIENCE)
+          ) {
+            // deep in a queue and boxed in: squeeze past sideways (contacts / nudges resolve it)
+            laneTarget[i] = x[i] + pref * HORSE.HALF_WIDTH * 2;
+          }
+        }
+        const v = (laneTarget[i] - x[i]) * 3;
+        desiredVx[i] = v > 2.5 ? 2.5 : v < -2.5 ? -2.5 : v;
+      } else if (settled && layer[i] !== Layer.C && (i + tick) % 6 === 0) {
+        const l = this.densityAt(x[i] - LOD.DENSITY_CELL, this.progress[i] + LOD.DENSITY_CELL);
+        const r = this.densityAt(x[i] + LOD.DENSITY_CELL, this.progress[i] + LOD.DENSITY_CELL);
+        this.tryLaneChange(i, l < r ? -1 : r < l ? 1 : i & 1 ? 1 : -1);
       }
     }
   }
@@ -545,7 +669,7 @@ export class HorseSimulation {
     const look = LOD.FOLLOW_DIST;
     const w = HORSE.HALF_WIDTH * 2 - 0.05; // barely touching flanks do not block
     const alongside = HORSE.HALF_LENGTH;
-    const { laneStart, laneList, laneP, laneX, x, state, speed, layer, targetSpeed, followCap, blocked } = this;
+    const { laneStart, laneList, laneP, laneX, x, state, speed, layer, targetSpeed, followCap, blocked, queueDepth } = this;
     const nl = this.laneCount;
     for (let l = 0; l < nl; l++) {
       const a = laneStart[l];
@@ -567,11 +691,17 @@ export class HorseSimulation {
         let best = -1;
         let bestDp: number = look;
         let beside = -1; // overlapping horse that is alongside rather than ahead
+        let downAhead = -1; // far field: downed horse we brush past instead of queueing behind
+        const isC = layer[i] === Layer.C;
         const xi = laneX[k];
         for (let m = k - 1; m >= a; m--) {
           const dp = laneP[m] - p;
           if (dp >= bestDp) break;
           const j = laneList[m];
+          if (isC && (state[j] === HorseState.FALL || state[j] === HorseState.RECOVER)) {
+            if (downAhead < 0 && dp < 3) downAhead = j;
+            continue;
+          }
           if (dp < alongside) {
             if (beside < 0) beside = j;
             continue;
@@ -589,6 +719,10 @@ export class HorseSimulation {
             if (dp >= bestDp) break;
             if (Math.abs(laneX[m] - xi) >= w) continue;
             const j = laneList[m];
+            if (isC && (state[j] === HorseState.FALL || state[j] === HorseState.RECOVER)) {
+              if (downAhead < 0 && dp < 3) downAhead = j;
+              continue;
+            }
             if (dp < alongside) {
               if (beside < 0) beside = j;
               continue;
@@ -599,13 +733,21 @@ export class HorseSimulation {
           }
         }
         // far field: side-by-side overlaps are eased apart laterally (no braking deadlock)
-        if (beside >= 0 && layer[i] === Layer.C) {
+        if (beside >= 0 && isC) {
           const d = x[i] - x[beside];
           x[i] += (d > 0 || (d === 0 && i > beside) ? 1 : -1) * LOD.SIDE_NUDGE;
+        }
+        // far field never queues behind a downed horse (it either went down in the group
+        // event or squeezes past it): ease sideways while passing
+        if (downAhead >= 0) {
+          const d = x[i] - x[downAhead];
+          x[i] += (d > 0 || (d === 0 && i > downAhead) ? 1 : -1) * LOD.SIDE_NUDGE * 2;
         }
         if (best < 0) {
           followCap[i] = Infinity;
           blocked[i] = 0;
+          queueDepth[i] = 0;
+          this.queueTime[i] = 0;
           continue;
         }
         const lenI = state[i] === HorseState.FALL ? HORSE.FALLEN_HALF_LENGTH : HORSE.HALF_LENGTH;
@@ -615,18 +757,55 @@ export class HorseSimulation {
         const leadGain = targetSpeed[best] - lead;
         const anticipate = leadGain > 0 ? (leadGain < LOD.FOLLOW_ANTICIPATE ? leadGain : LOD.FOLLOW_ANTICIPATE) : 0;
         let cap = lead + anticipate + (gap - minGap) / T;
-        // brake firmly but not to a standstill on a transient overlap (prevents jam waves)
-        const floor = lead - LOD.FOLLOW_MAX_BRAKE;
+        // brake firmly but not to a standstill (prevents jam waves). An actual overlap with
+        // the leader (negative gap: someone cut in / sideways nudge) is resolved sideways,
+        // not by braking further and further down a chain.
+        const floor = lead - (gap < 0 ? LOD.FOLLOW_OVERLAP_BRAKE : LOD.FOLLOW_MAX_BRAKE);
         if (cap < floor) cap = floor;
+        if (gap < 0 && isC) {
+          const d = x[i] - x[best];
+          x[i] += (d > 0 || (d === 0 && i > best) ? 1 : -1) * LOD.SIDE_NUDGE;
+        }
+        // queue behind a downed horse: depth 1/2 brake normally, deeper ones keep rolling
+        // (they are already steering round) so no standing traffic jam can form
+        const sb = state[best];
+        const down = sb === HorseState.FALL || sb === HorseState.RECOVER || sb === HorseState.STUMBLE;
+        // a leader that is merely still accelerating freely (gate start, after recovering)
+        // is not an obstacle worth queueing/detouring for
+        const accelerating = targetSpeed[best] > lead + 2 && followCap[best] > lead + 2;
+        const slow = down || (lead < targetSpeed[i] * 0.5 && !accelerating);
+        const depth = slow ? Math.min(255, queueDepth[best] + 1) : 0;
+        queueDepth[i] = depth;
+        if (depth > 0 && speed[i] < 2) this.queueTime[i] += SIM.DT;
+        else this.queueTime[i] = 0;
+        // near field: contacts resolve the squeeze. Far field: ease sideways past the slow
+        // leader (like passing a downed horse) so the overlap never becomes deep.
+        const impatient = depth > 2 || this.queueTime[i] > LOD.QUEUE_PATIENCE;
+        if (impatient && isC) {
+          const d = x[i] - x[best];
+          x[i] += (d > 0 || (d === 0 && i > best) ? 1 : -1) * LOD.SIDE_NUDGE * 2;
+        }
+        if (impatient) {
+          const keep = targetSpeed[i] * LOD.QUEUE_MIN_SPEED;
+          if (cap < keep) cap = keep;
+        }
         if (cap < 0) cap = 0;
-        // "stuck behind a slower horse" -> layer C flow looks for a way round
-        blocked[i] = gap < 3 && targetSpeed[best] < targetSpeed[i] * 0.97 ? 1 : 0;
+        if (depth > 0 && gap < 6) {
+          blocked[i] = 2;
+          this.detourFrom[i] = best;
+        } else {
+          // "stuck behind a slower horse" -> look for a way round
+          blocked[i] = gap < 3 && (targetSpeed[best] < targetSpeed[i] * 0.97 || lead < targetSpeed[i] * 0.8) ? 1 : 0;
+          this.detourFrom[i] = best;
+        }
         if (layer[i] === Layer.C) {
           followCap[i] = cap;
         } else {
           followCap[i] = Infinity;
           const st = state[i];
-          if ((st === HorseState.RUN || st === HorseState.AVOID) && cap < targetSpeed[i]) targetSpeed[i] = cap;
+          // near field: once already overlapping, contact resolution separates the pair;
+          // braking for it only propagates slowdowns through the crowd
+          if (gap >= 0 && (st === HorseState.RUN || st === HorseState.AVOID) && cap < targetSpeed[i]) targetSpeed[i] = cap;
         }
       }
     }
@@ -648,7 +827,15 @@ export class HorseSimulation {
       case HorseState.FALL:
         this.targetSpeed[i] = 0;
         this.desiredVx[i] = 0;
-        if (t >= this.stateDuration[i] && this.y[i] <= 0) this.setState(i, HorseState.RECOVER, HORSE.RECOVER_TIME);
+        // the horses underneath may have got up: settle onto what is left of the pile
+        if (this.groundY[i] > 0 && (i + this.tick) % 6 === 0) {
+          const h = this.pileHeightAt(i);
+          if (h < this.groundY[i]) this.groundY[i] = h;
+        }
+        if (t >= this.stateDuration[i] && this.y[i] <= this.groundY[i] + 0.01) {
+          this.setState(i, HorseState.RECOVER, HORSE.RECOVER_TIME);
+          this.groundY[i] = 0; // slides off the pile while getting up
+        }
         return false;
       case HorseState.RECOVER:
         this.targetSpeed[i] = this.baseSpeed[i] * 0.55;
@@ -703,10 +890,35 @@ export class HorseSimulation {
     this.setState(i, HorseState.FALL, this.rng.range(HORSE.FALL_TIME_MIN, HORSE.FALL_TIME_MAX));
     this.fallSide[i] = side !== 0 ? (side > 0 ? 1 : -1) : this.rng.sign();
     this.vy[i] = HORSE.FALL_HOP_VY * this.rng.range(0.7, 1.2);
-    if (this.y[i] < 0.01) this.y[i] = 0.01;
+    this.groundY[i] = this.layer[i] === Layer.C ? 0 : this.pileHeightAt(i);
+    if (this.y[i] < this.groundY[i] + 0.01) this.y[i] = this.groundY[i] + 0.01;
     this.chainGen[i] = gen > 255 ? 255 : gen;
     this.fallCount[i]++;
     this.fallsTotal++;
+  }
+
+  /** true if horse i is inside the fairness box right in front of the player */
+  inPlayerSafeBox(i: number): boolean {
+    const p0 = FIELD.PLAYER;
+    const dp = this.progress[i] - this.progress[p0];
+    return dp > -2 && dp < COLLISION.SAFE_AHEAD && Math.abs(this.x[i] - this.x[p0]) < COLLISION.SAFE_SIDE;
+  }
+
+  /** Height of the top of the downed horses under horse i (pile model, hash = near field). */
+  pileHeightAt(i: number): number {
+    const x = this.x[i];
+    const p = this.progress[i];
+    const found = this.hash.query(x - 1.6, p - 2.2, x + 1.6, p + 2.2);
+    const res = this.hash.result;
+    let top = 0;
+    for (let r = 0; r < found; r++) {
+      const j = res[r];
+      if (j === i || this.state[j] !== HorseState.FALL) continue;
+      if (Math.abs(this.x[j] - x) > 1.3 || Math.abs(this.progress[j] - p) > 1.9) continue;
+      const t = this.groundY[j] + HORSE.FALLEN_HEIGHT * HORSE.PILE_STACK;
+      if (t > top) top = t;
+    }
+    return top > HORSE.PILE_MAX ? HORSE.PILE_MAX : top;
   }
 
   canBeKnocked(i: number): boolean {
@@ -796,15 +1008,10 @@ export class HorseSimulation {
       this.desiredVx[i] = this.avoidDir[i] * HORSE.LATERAL_MAX;
       return;
     }
-    if (this.blocked[i] && Math.abs(this.laneTarget[i] - this.x[i]) < 0.2 && (i + this.tick) % 6 === 0) {
-      // stuck behind a slower horse: move one body to the emptier side if there is room
-      const l = this.densityAt(this.x[i] - LOD.DENSITY_CELL, this.progress[i] + LOD.DENSITY_CELL);
-      const r = this.densityAt(this.x[i] + LOD.DENSITY_CELL, this.progress[i] + LOD.DENSITY_CELL);
-      this.tryLaneChange(i, l < r ? -1 : r < l ? 1 : i & 1 ? 1 : -1);
-    }
     this.desiredVx[i] = clampf((this.laneTarget[i] - this.x[i]) * 0.6, -1.2, 1.2);
     const isA = layer === Layer.A;
     if (this.state[i] === HorseState.RUN) this.maybeMisstep(i);
+    if (isA) this.maybeYield(i);
     if (!isA && (i + this.tick) % COLLISION.B_PERCEIVE_PERIOD !== 0) return;
     const hazard = this.findHazardAhead(i);
     if (hazard < 0) return;
@@ -818,14 +1025,27 @@ export class HorseSimulation {
     }
   }
 
+  /**
+   * A near NPC that hears the (faster) player right behind it sometimes drifts aside if
+   * there is room — keeps the player's lines open without making NPCs ghosts.
+   */
+  private maybeYield(i: number): void {
+    const p0 = FIELD.PLAYER;
+    const dp = this.progress[p0] - this.progress[i];
+    if (dp > -1.5 || dp < -7) return;
+    const dx = this.x[i] - this.x[p0];
+    if (Math.abs(dx) > 1.1 || this.speed[p0] < this.speed[i] + 1) return;
+    if (Math.abs(this.laneTarget[i] - this.x[i]) > 0.2) return;
+    if (this.rng.next() >= this.skill[i] * COLLISION.YIELD_RATE * SIM.DT) return;
+    this.tryLaneChange(i, dx >= 0 ? 1 : -1);
+  }
+
   /** Spontaneous misstep (A/B): density-driven, never right in front of the player. */
   private maybeMisstep(i: number): void {
     const dens = this.densityAt(this.x[i], this.progress[i]) / LOD.DENSITY_REF;
     const hz = COLLISION.MISSTEP_HAZARD * SIM.DT * dens * dens * this.accidentScale();
     if (this.rng.next() >= hz) return;
-    const p0 = FIELD.PLAYER;
-    const dp = this.progress[i] - this.progress[p0];
-    if (dp > -2 && dp < COLLISION.SAFE_AHEAD && Math.abs(this.x[i] - this.x[p0]) < COLLISION.SAFE_SIDE) return;
+    if (this.inPlayerSafeBox(i)) return;
     if (this.rng.next() < COLLISION.MISSTEP_FALL_SHARE) this.fall(i, 0, 0);
     else this.stumble(i);
   }
@@ -838,19 +1058,22 @@ export class HorseSimulation {
     let best = -1;
     let bestDp = Infinity;
     // hash holds last tick's A∪B membership; lookahead tolerates one tick of staleness
-    this.hash.forEachInRect(x - 1.6, p + 0.5, x + 1.6, p + look, (j) => {
-      if (j === i) return;
+    const found = this.hash.query(x - 1.6, p + 0.5, x + 1.6, p + look);
+    const res = this.hash.result;
+    for (let r = 0; r < found; r++) {
+      const j = res[r];
+      if (j === i) continue;
       const st = this.state[j];
       const slow = this.speed[j] < this.speed[i] - 4;
-      if (st !== HorseState.FALL && st !== HorseState.STUMBLE && !slow) return;
+      if (st !== HorseState.FALL && st !== HorseState.STUMBLE && !slow) continue;
       const dp = this.progress[j] - p;
-      if (dp <= 0.5 || dp > look) return;
-      if (Math.abs(this.x[j] - x) > 1.4) return;
+      if (dp <= 0.5 || dp > look) continue;
+      if (Math.abs(this.x[j] - x) > 1.4) continue;
       if (dp < bestDp) {
         bestDp = dp;
         best = j;
       }
-    });
+    }
     return best;
   }
 
@@ -898,7 +1121,8 @@ export class HorseSimulation {
       const st = this.state[i];
       const isPlayer = i === p0;
       // forward speed
-      const accel = isPlayer ? PLAYER.ACCEL : HORSE.ACCEL;
+      // standing starts are punchy (a horse pulls away from a near-stop quickly)
+      const accel = isPlayer ? PLAYER.ACCEL : this.speed[i] < 4 ? HORSE.ACCEL_LOW : HORSE.ACCEL;
       const decel = st === HorseState.FALL ? HORSE.FALL_DECEL : HORSE.DECEL;
       let sp = this.speed[i];
       const dv = this.targetSpeed[i] - sp;
@@ -929,11 +1153,12 @@ export class HorseSimulation {
 
       // vertical (jumps, tumble bounces)
       let y = this.y[i];
-      if (y > 0 || this.vy[i] !== 0) {
+      const ground = st === HorseState.FALL ? this.groundY[i] : 0;
+      if (y > ground || this.vy[i] !== 0) {
         let vy = this.vy[i] - HORSE.GRAVITY * dt;
         y += vy * dt;
-        if (y <= 0) {
-          y = 0;
+        if (y <= ground) {
+          y = ground;
           if (st === HorseState.FALL && vy < -2) vy = -vy * HORSE.FALL_RESTITUTION;
           else vy = 0;
         }
@@ -962,6 +1187,13 @@ export class HorseSimulation {
       }
     }
   }
+}
+
+/** true if lateral position x lies in one of the open "streak" corridors */
+export function inCorridor(x: number): boolean {
+  const sp = FIELD.CORRIDOR_SPACING;
+  const m = (((x - FIELD.CORRIDOR_OFFSET) % sp) + sp) % sp;
+  return m < FIELD.CORRIDOR_HALF || m > sp - FIELD.CORRIDOR_HALF;
 }
 
 function clampf(v: number, lo: number, hi: number): number {

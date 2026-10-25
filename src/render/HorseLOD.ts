@@ -24,6 +24,9 @@ export interface RenderLodSettings {
   shadows: boolean;
 }
 
+/** far-field crowd impostors are drawn up to this camera distance (≈ fog end) */
+export const IMPOSTOR_DIST = 1300;
+
 export const DEFAULT_LOD: RenderLodSettings = {
   nearDist: 38,
   midDist: 140,
@@ -105,6 +108,8 @@ export interface HorseRenderStats {
   triangles: number;
   /** instances uploaded this frame (near + mid + far) */
   instances: number;
+  /** far-field crowd drawn as coloured points (beyond the mesh budget / distance) */
+  impostors: number;
 }
 
 const SILKS = [
@@ -121,7 +126,7 @@ export class HorseRenderer {
   private readonly mid: Tier;
   private readonly far: Tier;
   readonly settings: RenderLodSettings = { ...DEFAULT_LOD };
-  readonly stats: HorseRenderStats = { near: 0, mid: 0, far: 0, culled: 0, triangles: 0, instances: 0 };
+  readonly stats: HorseRenderStats = { near: 0, mid: 0, far: 0, culled: 0, triangles: 0, instances: 0, impostors: 0 };
 
   private readonly frustum = new THREE.Frustum();
   private readonly projScreen = new THREE.Matrix4();
@@ -156,6 +161,28 @@ export class HorseRenderer {
     this.visD = new Float32Array(n);
     this.thinKey = new Float32Array(n);
     for (let i = 0; i < n; i++) this.thinKey[i] = fmix32(i + 1) / 4294967296;
+    // impostor points take the jockey silk colour (linear) from the colour texture
+    this.silkLinear = new Float32Array(n * 3);
+    const texData = this.colorTexture.image.data as Uint8Array;
+    const c = new THREE.Color();
+    for (let i = 0; i < n; i++) {
+      const o = (i * TEXELS_PER_HORSE + 1) * 4;
+      c.setRGB(texData[o] / 255, texData[o + 1] / 255, texData[o + 2] / 255, THREE.SRGBColorSpace);
+      this.silkLinear[i * 3] = c.r;
+      this.silkLinear[i * 3 + 1] = c.g;
+      this.silkLinear[i * 3 + 2] = c.b;
+    }
+    this.impPos = new Float32Array(n * 3);
+    this.impCol = new Float32Array(n * 3);
+    this.impGeo = new THREE.BufferGeometry();
+    this.impGeo.setAttribute('position', new THREE.BufferAttribute(this.impPos, 3).setUsage(THREE.DynamicDrawUsage));
+    this.impGeo.setAttribute('color', new THREE.BufferAttribute(this.impCol, 3).setUsage(THREE.DynamicDrawUsage));
+    this.impGeo.setDrawRange(0, 0);
+    this.impostors = new THREE.Points(
+      this.impGeo,
+      new THREE.PointsMaterial({ size: 1.9, sizeAttenuation: true, vertexColors: true }),
+    );
+    this.impostors.frustumCulled = false;
     this.near = new Tier(Math.min(n, 512), buildHorseNear(), createHorseMaterial({ colors: this.colorTexture, animated: true }), true);
     this.mid = new Tier(Math.min(n, 4096), buildHorseMid(), createHorseMaterial({ colors: this.colorTexture, animated: true }), true);
     this.far = new Tier(n, buildHorseFar(), createHorseMaterial({ colors: this.colorTexture, animated: false, scale: 1.12 }), false);
@@ -163,6 +190,46 @@ export class HorseRenderer {
       if (t.shadow) this.group.add(t.shadow);
       this.group.add(t.mesh);
     }
+    this.group.add(this.impostors);
+  }
+
+  // ---- far-field impostors (one Points draw call) ----
+  private readonly impPos: Float32Array;
+  private readonly impCol: Float32Array;
+  private readonly impGeo: THREE.BufferGeometry;
+  private readonly impostors: THREE.Points;
+  private readonly silkLinear: Float32Array;
+  private impCount = 0;
+
+  private addImpostor(i: number, wx: number, wz: number): void {
+    const c = this.impCount++;
+    const o = c * 3;
+    this.impPos[o] = wx;
+    this.impPos[o + 1] = 1.7;
+    this.impPos[o + 2] = wz;
+    this.impCol[o] = this.silkLinear[i * 3];
+    this.impCol[o + 1] = this.silkLinear[i * 3 + 1];
+    this.impCol[o + 2] = this.silkLinear[i * 3 + 2];
+  }
+
+  private commitImpostors(): void {
+    const n = this.impCount;
+    this.impGeo.setDrawRange(0, n);
+    for (const name of ['position', 'color']) {
+      const a = this.impGeo.getAttribute(name) as THREE.BufferAttribute;
+      a.clearUpdateRanges();
+      a.addUpdateRange(0, Math.max(1, n * 3));
+      a.needsUpdate = true;
+    }
+    this.impostors.visible = n > 0;
+  }
+
+  get seed(): number {
+    return this.sim.seed;
+  }
+
+  get n(): number {
+    return this.sim.n;
   }
 
   rebind(sim: HorseSimulation): void {
@@ -180,6 +247,8 @@ export class HorseRenderer {
       }
     }
     this.colorTexture.dispose();
+    this.impGeo.dispose();
+    (this.impostors.material as THREE.Material).dispose();
   }
 
   /** Compute the interpolated player pose only (call before camera update). */
@@ -243,6 +312,10 @@ export class HorseRenderer {
     const binMax = hist.length - 1;
     const thinKey = this.thinKey;
     const keep = set.farKeep;
+    const playerP = progress[FIELD.PLAYER];
+    const simTime = sim.time;
+    const imp2 = IMPOSTOR_DIST * IMPOSTOR_DIST;
+    this.impCount = 0;
     const midSetting = set.midDist;
     // camera -> player segment (for hiding occluders)
     const pp = this.playerPose;
@@ -253,15 +326,19 @@ export class HorseRenderer {
     segZ /= segLen;
     let nVis = 0;
     for (let i = 0; i < sim.n; i++) {
-      const x = prevX[i] + (xs[i] - prevX[i]) * alpha;
+      let x = prevX[i] + (xs[i] - prevX[i]) * alpha;
       const p = prevProgress[i] + (progress[i] - prevProgress[i]) * alpha;
+      // presentation only: distant horses sway a little sideways so the far-field lane
+      // model does not read as single-file columns (near horses are drawn exactly)
+      const farW = (Math.abs(p - playerP) - 45) / 40;
+      if (farW > 0) x += (farW > 1 ? 1 : farW) * 0.32 * Math.sin(simTime * (0.5 + thinKey[i]) + thinKey[i] * 40);
       course.toWorld(x, p, tmp);
       const wx = tmp[0];
       const wz = tmp[1];
       const dx = wx - camX;
       const dz = wz - camZ;
       const d2 = dx * dx + dz * dz;
-      if (d2 > far2) {
+      if (d2 > imp2) {
         culled++;
         continue;
       }
@@ -278,9 +355,15 @@ export class HorseRenderer {
         continue;
       }
       const d = Math.sqrt(d2);
+      if (d2 > far2) {
+        this.addImpostor(i, wx, wz);
+        culled++;
+        continue;
+      }
       if (i !== FIELD.PLAYER) {
         // stable thinning of the far field on low quality levels
         if (d > midSetting && thinKey[i] >= keep) {
+          this.addImpostor(i, wx, wz);
           culled++;
           continue;
         }
@@ -290,10 +373,12 @@ export class HorseRenderer {
           culled++;
           continue;
         }
+        // occluders: a cone around the camera->player line, widening towards the camera
+        // (horses diagonally behind the player otherwise cover the bottom of the screen)
         const t = dx * segX + dz * segZ; // along camera->player, in metres
-        if (t > 0 && t < segLen - 2.6) {
+        if (t > -2 && t < segLen - 2.6) {
           const perp = Math.abs(dx * segZ - dz * segX);
-          if (perp < 1.5) {
+          if (perp < 1.4 + (segLen - t) * 0.2) {
             culled++;
             continue;
           }
@@ -351,6 +436,7 @@ export class HorseRenderer {
       else if (d < midR) tier = mid;
       else if (d < farR) tier = far;
       else {
+        this.addImpostor(i, wx, wz);
         culled++;
         continue;
       }
@@ -416,6 +502,7 @@ export class HorseRenderer {
     near.commit();
     mid.commit();
     far.commit();
+    this.commitImpostors();
     const shadows = set.shadows;
     if (near.shadow) near.shadow.visible = shadows;
     if (mid.shadow) mid.shadow.visible = shadows;
@@ -426,6 +513,7 @@ export class HorseRenderer {
     s.far = far.count;
     s.culled = culled;
     s.instances = near.count + mid.count + far.count;
+    s.impostors = this.impCount;
     s.triangles =
       near.count * near.trisPerInstance + mid.count * mid.trisPerInstance + far.count * far.trisPerInstance;
   }

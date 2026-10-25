@@ -43,6 +43,11 @@ export interface QualityOptions {
   initialLevel?: number;
   /** highest level automatic upgrades may reach (default: second highest) */
   maxAutoLevel?: number;
+  /**
+   * frame-rate floor of the budget regardless of the measured refresh (PC: 60 so a GPU-bound
+   * desktop stuck at ~30 fps is not mistaken for a 30 Hz display)
+   */
+  minBudgetHz?: number;
 }
 
 export interface FrameSample {
@@ -90,7 +95,8 @@ export class QualityManager {
 
   /** frame budget (ms) the controller is aiming for */
   get budgetMs(): number {
-    return Math.max(1000 / 60, this.refreshMs);
+    const b = Math.max(1000 / 60, this.refreshMs);
+    return this.opts.minBudgetHz ? Math.min(b, 1000 / this.opts.minBudgetHz) : b;
   }
 
   /** returns a state to apply before the next render, at most once per change */

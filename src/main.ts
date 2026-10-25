@@ -9,7 +9,8 @@ import { parseSeed, randomSeed } from './data/Seed';
  *   ?autoplay=1   bot drives the player (verification / attract mode)
  *   ?pr=1         fixed pixel ratio (disables auto quality)
  *   ?q=0..3       initial render LOD level
- *   ?ff=20        debug: fast-forward the simulation 20 s before rendering
+ *   ?ff=20        debug: fast-forward the race 20 s after it starts (implies start)
+ *   ?start=1      skip the title screen
  */
 function boot(): void {
   const params = new URLSearchParams(location.search);
@@ -25,6 +26,7 @@ function boot(): void {
       seed,
       debug: params.get('debug') === '1',
       autoplay: params.get('autoplay') === '1',
+      autostart: params.get('start') === '1' || params.get('autoplay') === '1' || ff > 0,
       pixelRatio: pr ? Math.max(0.25, Math.min(3, Number(pr) || 1)) : undefined,
       quality: q !== null ? Math.max(0, Math.min(3, Number(q) | 0)) : undefined,
       fastForward: ff > 0 ? Math.min(ff, 300) : undefined,

@@ -1,41 +1,48 @@
 /**
- * Raw input collection (keyboard + touch). Converted into a per-tick PlayerIntent by
- * PlayerController. Jump is edge-triggered and latched until the sim consumes it, so a
- * tap shorter than one sim tick is never lost.
+ * Raw input collection (keyboard; touch via ui/TouchControls). Converted into a per-tick
+ * PlayerIntent by PlayerController. Jump is edge-triggered and latched until the sim
+ * consumes it, so a tap shorter than one sim tick is never lost.
  */
 export class Input {
   left = false;
   right = false;
-  dash = false;
+  keyDash = false;
+  touchDash = false;
   private jumpLatched = false;
-  /** analogue steer from touch drag (-1..1), overrides keys while active */
+  /** analogue steer from the touch stick (-1..1), overrides keys while active */
   touchSteer: number | null = null;
   restartRequested = false;
+  pauseRequested = false;
+  /** any key / tap (unlocks audio, starts from the title) */
+  onAnyInput: (() => void) | null = null;
+  /** Enter / Space on menus */
+  confirmRequested = false;
 
   private readonly keyDown = (e: KeyboardEvent) => this.onKey(e, true);
   private readonly keyUp = (e: KeyboardEvent) => this.onKey(e, false);
   private readonly blur = () => this.clear();
-  private touchId: number | null = null;
-  private touchStartX = 0;
+  private readonly pointer = () => this.onAnyInput?.();
 
-  constructor(private readonly target: HTMLElement) {
+  constructor() {
     window.addEventListener('keydown', this.keyDown);
     window.addEventListener('keyup', this.keyUp);
     window.addEventListener('blur', this.blur);
-    target.addEventListener('pointerdown', this.onPointerDown);
-    target.addEventListener('pointermove', this.onPointerMove);
-    target.addEventListener('pointerup', this.onPointerUp);
-    target.addEventListener('pointercancel', this.onPointerUp);
+    window.addEventListener('pointerdown', this.pointer, { capture: true });
   }
 
   dispose(): void {
     window.removeEventListener('keydown', this.keyDown);
     window.removeEventListener('keyup', this.keyUp);
     window.removeEventListener('blur', this.blur);
-    this.target.removeEventListener('pointerdown', this.onPointerDown);
-    this.target.removeEventListener('pointermove', this.onPointerMove);
-    this.target.removeEventListener('pointerup', this.onPointerUp);
-    this.target.removeEventListener('pointercancel', this.onPointerUp);
+    window.removeEventListener('pointerdown', this.pointer, { capture: true });
+  }
+
+  get dash(): boolean {
+    return this.keyDash || this.touchDash;
+  }
+
+  pressJump(): void {
+    this.jumpLatched = true;
   }
 
   /** returns and clears the latched jump */
@@ -45,17 +52,26 @@ export class Input {
     return j;
   }
 
+  /** drop latched presses (e.g. when a race starts) */
+  reset(): void {
+    this.jumpLatched = false;
+    this.restartRequested = false;
+    this.pauseRequested = false;
+    this.confirmRequested = false;
+  }
+
   get steer(): number {
     if (this.touchSteer !== null) return this.touchSteer;
     return (this.right ? 1 : 0) - (this.left ? 1 : 0);
   }
 
   private clear(): void {
-    this.left = this.right = this.dash = false;
+    this.left = this.right = this.keyDash = this.touchDash = false;
     this.touchSteer = null;
   }
 
   private onKey(e: KeyboardEvent, down: boolean): void {
+    if (down) this.onAnyInput?.();
     switch (e.code) {
       case 'KeyA':
       case 'ArrowLeft':
@@ -67,12 +83,22 @@ export class Input {
         break;
       case 'ShiftLeft':
       case 'ShiftRight':
-        this.dash = down;
+        this.keyDash = down;
         break;
       case 'Space':
       case 'ArrowUp':
       case 'KeyW':
-        if (down && !e.repeat) this.jumpLatched = true;
+        if (down && !e.repeat) {
+          this.jumpLatched = true;
+          this.confirmRequested = true;
+        }
+        break;
+      case 'Enter':
+        if (down && !e.repeat) this.confirmRequested = true;
+        break;
+      case 'Escape':
+      case 'KeyP':
+        if (down && !e.repeat) this.pauseRequested = true;
         break;
       case 'KeyR':
         if (down) this.restartRequested = true;
@@ -82,37 +108,4 @@ export class Input {
     }
     e.preventDefault();
   }
-
-  // Minimal touch scheme (full mobile UI is Phase 1): left half drag = steer,
-  // centre-right strip (50–75 % width) hold = dash, far right (75–100 %) tap = jump.
-  // Jump and dash are separate zones so dashing never forces a jump.
-  private dashPointer: number | null = null;
-  private readonly onPointerDown = (e: PointerEvent) => {
-    if (e.pointerType === 'mouse') return;
-    const w = this.target.clientWidth;
-    if (e.clientX < w / 2) {
-      this.touchId = e.pointerId;
-      this.touchStartX = e.clientX;
-      this.touchSteer = 0;
-    } else if (e.clientX < w * 0.75) {
-      this.dashPointer = e.pointerId;
-      this.dash = true;
-    } else {
-      this.jumpLatched = true;
-    }
-  };
-  private readonly onPointerMove = (e: PointerEvent) => {
-    if (e.pointerId !== this.touchId) return;
-    const dx = e.clientX - this.touchStartX;
-    this.touchSteer = Math.max(-1, Math.min(1, dx / 60));
-  };
-  private readonly onPointerUp = (e: PointerEvent) => {
-    if (e.pointerId === this.touchId) {
-      this.touchId = null;
-      this.touchSteer = null;
-    } else if (e.pointerId === this.dashPointer) {
-      this.dashPointer = null;
-      this.dash = false;
-    }
-  };
 }

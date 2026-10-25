@@ -103,3 +103,80 @@ describe('OvertakeTracker', () => {
     expect(t.total).toBe(r0 - r1);
   });
 });
+
+import { RaceStats, formatInt, formatTime, makeResult } from '../src/game/Race';
+
+describe('RaceStats', () => {
+  it('tracks streaks between falls and bursts of passes', () => {
+    const progress = new Float64Array([0, 1, 2, 3, 4, 5]);
+    const s = new RaceStats(6, 0);
+    s.update({ progress }, 0, 0);
+    progress[0] = 2.5; // passes #1, #2
+    expect(s.update({ progress }, 0.1, 0)).toBe(2);
+    expect(s.streak).toBe(2);
+    expect(s.burst).toBe(2);
+    // player falls: streak resets (max kept) and the burst is closed
+    progress[0] = 3.5; // passes #3
+    s.update({ progress }, 0.2, 1);
+    expect(s.streak).toBe(1);
+    expect(s.maxStreak).toBe(2);
+    expect(s.lastBurst).toBe(2);
+    expect(s.burstSeq).toBe(1);
+    // a long pause closes the running burst (size 1) before the next passes count
+    progress[0] = 10;
+    s.update({ progress }, 5, 1);
+    expect(s.burstSeq).toBe(2);
+    expect(s.lastBurst).toBe(1);
+    expect(s.burst).toBe(2);
+    expect(s.maxStreak).toBe(3);
+    expect(s.total).toBe(5);
+  });
+
+  it('closes bursts after the window even if passes continue', () => {
+    const n = 200;
+    const progress = new Float64Array(n);
+    for (let i = 1; i < n; i++) progress[i] = i;
+    const s = new RaceStats(n, 0);
+    s.update({ progress }, 0, 0);
+    let t = 0;
+    for (let k = 1; k <= 60; k++) {
+      t = k * 0.1;
+      progress[0] = k * 3 + 0.5;
+      s.update({ progress }, t, 0);
+    }
+    expect(s.burstSeq).toBeGreaterThanOrEqual(2);
+    expect(s.lastBurst).toBeLessThanOrEqual(3 * 21);
+  });
+});
+
+describe('results', () => {
+  it('PERFECT only for 1st place with zero falls; WIN for 1st', () => {
+    const base = { seed: 1, field: 10000, time: 72.5, timedOut: false, overtakes: 9999, maxStreak: 100 };
+    expect(makeResult({ ...base, rank: 1, falls: 0 }).perfect).toBe(true);
+    const fell = makeResult({ ...base, rank: 1, falls: 1 });
+    expect(fell.win).toBe(true);
+    expect(fell.perfect).toBe(false);
+    expect(makeResult({ ...base, rank: 2, falls: 0 }).win).toBe(false);
+    expect(makeResult({ ...base, rank: 1, falls: 0, timedOut: true, time: null }).win).toBe(false);
+  });
+
+  it('formats numbers and times', () => {
+    expect(formatInt(1248)).toBe('1,248');
+    expect(formatInt(10000)).toBe('10,000');
+    expect(formatTime(72.34)).toBe('01:12.34');
+    expect(formatTime(5.5)).toBe('00:05.50');
+    expect(formatTime(null)).toBe('--:--.--');
+  });
+});
+
+import { isBetter } from '../src/data/Storage';
+
+describe('personal best ordering', () => {
+  it('lower rank wins, then faster time; timeouts never beat a finished time', () => {
+    expect(isBetter({ rank: 5, time: 80 }, null)).toBe(true);
+    expect(isBetter({ rank: 4, time: 90 }, { rank: 5, time: 80 })).toBe(true);
+    expect(isBetter({ rank: 5, time: 79 }, { rank: 5, time: 80 })).toBe(true);
+    expect(isBetter({ rank: 5, time: 81 }, { rank: 5, time: 80 })).toBe(false);
+    expect(isBetter({ rank: 5, time: null }, { rank: 5, time: 80 })).toBe(false);
+  });
+});
