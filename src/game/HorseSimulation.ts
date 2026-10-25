@@ -1,6 +1,6 @@
 import { Rng, deriveSeed } from '../data/Seed';
 import type { CourseSpec } from '../data/Course';
-import { COLLISION, DEFAULT_TUNING, DIRECTOR, FIELD, HORSE, LOD, PLAYER, SIM, type SimTuning } from './Config';
+import { COLLISION, COURSE, DEFAULT_TUNING, DIRECTOR, FIELD, HORSE, LOD, PLAYER, SIM, type SimTuning } from './Config';
 import { SpatialHash, resolveCollisions } from './Collision';
 
 /** Horse behaviour states (stored in a Uint8Array). */
@@ -628,7 +628,7 @@ export class HorseSimulation {
         const nx = x + side * step * k;
         if (nx < -half || nx > half) continue;
         // lane changes keep the streak corridors open
-        if (inCorridor(nx)) continue;
+        if (this.corridorOpen(nx, p)) continue;
         if (wide ? this.slotFree(nx, p, i, 1.2, 2.4) : this.slotFree(nx, p, i)) {
           this.laneTarget[i] = nx;
           return true;
@@ -668,7 +668,9 @@ export class HorseSimulation {
           const dp = this.progress[lead] - this.progress[i];
           if (dp > 2.2 && dp < 5.5) {
             this.eventCooldown[i] = COLLISION.EVENT_COOLDOWN;
-            if (this.rng.next() < this.skill[i] * LOD.NPC_HOP_CHANCE * this.tuning.avoidSkill) {
+            // (the longer it has been stuck, the more determined the scramble)
+            const urge = 1 + 2.5 * Math.max(0, this.queueTime[i] - LOD.CLIMB_AFTER);
+            if (this.rng.next() < this.skill[i] * LOD.NPC_HOP_CHANCE * this.tuning.avoidSkill * urge) {
               this.vy[i] = LOD.NPC_HOP_VY;
               this.y[i] = 0.01;
               this.hops++;
@@ -988,7 +990,10 @@ export class HorseSimulation {
   // ======================================================================================
 
   private pace(i: number): number {
-    return 1 + HORSE.PACE_AMPLITUDE * Math.sin(this.time * this.paceFreq[i] + this.pacePhase[i]);
+    // horses tire over the final stretch (room for a late charge from behind)
+    const toGo = this.course.length - this.progress[i];
+    const fade = toGo < HORSE.FADE_DIST ? HORSE.FADE * Math.min(1, 1 - toGo / HORSE.FADE_DIST) : 0;
+    return (1 + HORSE.PACE_AMPLITUDE * Math.sin(this.time * this.paceFreq[i] + this.pacePhase[i])) * (1 - fade);
   }
 
   /** Layer C: low-frequency crowd flow decision based on the density field. */
@@ -1007,12 +1012,11 @@ export class HorseSimulation {
     // on / approaching a turn the field drifts towards the inside rail (shorter way round):
     // the inside gets crowded, the outside opens up
     if (
-      !this.blocked[i] &&
-      Math.abs(this.laneTarget[i] - x) < 0.2 &&
-      this.course.curvatureAt(p + 40) > 0 &&
+      Math.abs(this.laneTarget[i] - x) < 0.5 &&
+      this.nearTurn(p, LOD.INWARD_LEAD) &&
       this.rng.next() < LOD.INWARD_DRIFT
     ) {
-      this.tryLaneChange(i, -1);
+      this.tryDriftIn(i);
     }
     // stuck behind a slower horse: change lane by one body width if (and only if) there is room
     if (this.blocked[i] && Math.abs(this.laneTarget[i] - x) < 0.2) {
@@ -1023,9 +1027,10 @@ export class HorseSimulation {
 
     // rare group falls, more likely in dense regions (far-field "chain reaction" proxy)
     const dens = Math.max(0.5, here / ref);
-    let hz = LOD.C_FALL_HAZARD * dens * LOD.C_PERIOD * this.accidentScale();
+    let hz = LOD.C_FALL_HAZARD * dens * LOD.C_PERIOD * this.accidentScale() * this.railFactor(x, p);
     // the leading pack races shoulder to shoulder: extra contact accidents up front
     if (this.orderPos[i] < LOD.LEAD_PACK) hz += LOD.LEAD_HAZARD * SIM.DT * LOD.C_PERIOD * this.accidentScale();
+    hz *= this.tuning.background;
     if (this.state[i] === HorseState.RUN && this.rng.next() < hz) {
       this.fall(i, 0, 0);
       this.groupEvents.push({ x, p, r: LOD.C_FALL_CLUSTER_RADIUS * this.rng.range(0.8, 1.6) });
@@ -1074,6 +1079,7 @@ export class HorseSimulation {
    * already clear of the field it happens in the nearest pack ahead instead.
    */
   private directorAccident(): void {
+    if (this.tuning.background <= 0) return;
     const p0 = FIELD.PLAYER;
     const pp = this.progress[p0];
     const px = this.x[p0];
@@ -1101,7 +1107,10 @@ export class HorseSimulation {
     }
     // most events block the player's own line (jump it or go round), the rest hit the
     // densest spot nearby (spectacle, and piles that change the traffic)
-    const inLine = this.rng.next() < DIRECTOR.IN_LINE;
+    // the first event never lands on an open streak corridor: the escape routes out of the
+    // back of the field must work from the start (Phase 1b review M4)
+    const firstEvent = this.directorEvents === 0;
+    const inLine = this.rng.next() < DIRECTOR.IN_LINE && !firstEvent;
     let best = -1;
     let bestScore = -Infinity;
     for (let k = k0; k < o.length; k++) {
@@ -1110,6 +1119,7 @@ export class HorseSimulation {
       if (i === p0 || this.state[i] !== HorseState.RUN || this.inPlayerSafeBox(i)) continue;
       const dx = Math.abs(this.x[i] - px);
       if (dx > (inLine ? 5 : DIRECTOR.SIDE)) continue;
+      if (firstEvent && corridorDistance(this.x[i]) < 4.5) continue;
       const score = inLine
         ? -dx + this.rng.next()
         : this.densityAt(this.x[i], this.progress[i]) - dx * 0.4 + this.rng.next() * 3;
@@ -1128,9 +1138,11 @@ export class HorseSimulation {
       // in-line events are centred on the player's lane so the pile lands across it
       x: inLine ? px : this.x[best],
       p: this.progress[best],
-      r: DIRECTOR.RADIUS,
+      // in-line events are a sparser, lower line of fallers across the lane: mostly one
+      // layer high, i.e. a jump chance (going round costs a detour through the crowd)
+      r: inLine ? DIRECTOR.LINE_RADIUS : DIRECTOR.RADIUS,
       allLayers: true,
-      chance: DIRECTOR.CHANCE,
+      chance: inLine ? DIRECTOR.LINE_CHANCE : DIRECTOR.CHANCE,
       downScale: DIRECTOR.DOWN_SCALE,
     });
   }
@@ -1144,7 +1156,17 @@ export class HorseSimulation {
     }
     this.desiredVx[i] = clampf((this.laneTarget[i] - this.x[i]) * 0.6, -1.2, 1.2);
     const isA = layer === Layer.A;
-    if (this.state[i] === HorseState.RUN) this.maybeMisstep(i);
+    if (this.state[i] === HorseState.RUN) {
+      this.maybeMisstep(i);
+      // the near field drifts to the inside before / on a turn too (same rate per second)
+      if (
+        Math.abs(this.laneTarget[i] - this.x[i]) < 0.5 &&
+        this.nearTurn(this.progress[i], LOD.INWARD_LEAD) &&
+        this.rng.next() < LOD.INWARD_DRIFT / LOD.C_PERIOD
+      ) {
+        this.tryDriftIn(i);
+      }
+    }
     if (isA) this.maybeYield(i);
     if (!isA && (i + this.tick) % COLLISION.B_PERCEIVE_PERIOD !== 0) return;
     const hazard = this.findHazardAhead(i);
@@ -1174,11 +1196,71 @@ export class HorseSimulation {
     this.tryLaneChange(i, dx >= 0 ? 1 : -1);
   }
 
+  /**
+   * Squeeze a small step towards the inside rail if the horse beside it on that side is
+   * more than DRIFT_MIN_SPACING away (no full free lane needed): the field packs the rail
+   * on the way into a turn, like a real race.
+   */
+  private tryDriftIn(i: number): void {
+    // only a horse running freely squeezes in (packing a crawling queue stalls the rail)
+    if (this.blocked[i] || this.speed[i] < this.baseSpeed[i] * 0.7) return;
+    const x = this.x[i];
+    const p = this.progress[i];
+    const nx = x - LOD.DRIFT_STEP;
+    const rail = -this.course.width * 0.5;
+    if (x > rail + LOD.DRIFT_REACH || nx < rail + 0.9 || this.corridorOpen(nx, p)) return;
+    // the pull fades out towards the edge of its reach (no sharp empty band there)
+    const fade = (rail + LOD.DRIFT_REACH - x) / LOD.DRIFT_FADE;
+    if (fade < 1 && this.rng.next() > fade) return;
+    const lo = nx - LOD.DRIFT_MIN_SPACING;
+    const l0 = this.laneIndex(lo);
+    const l1 = this.laneIndex(x);
+    const win = HORSE.HALF_LENGTH * 1.65;
+    for (let l = l0; l <= l1; l++) {
+      const a = this.laneStart[l];
+      const b = this.laneStart[l + 1];
+      let lo2 = a;
+      let hi = b;
+      const top = p + win;
+      while (lo2 < hi) {
+        const mid = (lo2 + hi) >> 1;
+        if (this.laneP[mid] > top) lo2 = mid + 1;
+        else hi = mid;
+      }
+      for (let k = lo2; k < b; k++) {
+        if (this.laneP[k] < p - win) break;
+        const j = this.laneList[k];
+        if (j === i) continue;
+        const xj = this.x[j];
+        if (xj >= lo && xj < x - 0.02) return;
+      }
+    }
+    this.laneTarget[i] = nx;
+  }
+
+  /** on a turn or within `before` m of one */
+  nearTurn(p: number, before: number): boolean {
+    const c = this.course;
+    return c.curvatureAt(p) > 0 || c.curvatureAt(p + before * 0.5) > 0 || c.curvatureAt(p + before) > 0;
+  }
+
+  /** x lies in a streak corridor that is open at progress p (inner ones close at turns) */
+  corridorOpen(x: number, p: number): boolean {
+    if (!inCorridor(x)) return false;
+    if (x > -this.course.width * 0.5 + FIELD.CORRIDOR_INNER_CLOSE) return true;
+    return !this.nearTurn(p, FIELD.CORRIDOR_CLOSE_BEFORE);
+  }
+
+  private railFactor(x: number, p: number): number {
+    return x < -this.course.width * 0.5 + LOD.RAIL_BAND && this.course.curvatureAt(p) > 0 ? LOD.RAIL_HAZARD_MULT : 1;
+  }
+
   /** Spontaneous misstep (A/B): density-driven, never right in front of the player. */
   private maybeMisstep(i: number): void {
     const dens = Math.max(0.5, this.densityAt(this.x[i], this.progress[i]) / LOD.DENSITY_REF);
-    let hz = COLLISION.MISSTEP_HAZARD * SIM.DT * dens * this.accidentScale();
+    let hz = COLLISION.MISSTEP_HAZARD * SIM.DT * dens * this.accidentScale() * this.railFactor(this.x[i], this.progress[i]);
     if (this.orderPos[i] < LOD.LEAD_PACK) hz += LOD.LEAD_HAZARD * SIM.DT * this.accidentScale();
+    hz *= this.tuning.background;
     if (this.rng.next() >= hz) return;
     if (this.inPlayerSafeBox(i)) return;
     if (this.rng.next() < COLLISION.MISSTEP_FALL_SHARE) this.fall(i, 0, 0);
@@ -1347,7 +1429,13 @@ export class HorseSimulation {
       const isPlayer = i === p0;
       // forward speed
       // standing starts are punchy (a horse pulls away from a near-stop quickly)
-      const accel = isPlayer ? PLAYER.ACCEL : this.speed[i] < 4 ? HORSE.ACCEL_LOW : HORSE.ACCEL;
+      const accel = isPlayer
+        ? this.dashing && this.speed[i] > PLAYER.CRUISE_SPEED * 0.7
+          ? PLAYER.DASH_ACCEL
+          : PLAYER.ACCEL
+        : this.speed[i] < 4
+          ? HORSE.ACCEL_LOW
+          : HORSE.ACCEL;
       const decel = st === HorseState.FALL ? HORSE.FALL_DECEL : HORSE.DECEL;
       let sp = this.speed[i];
       const dv = this.targetSpeed[i] - sp;
@@ -1362,7 +1450,7 @@ export class HorseSimulation {
       const latAcc = isPlayer ? PLAYER.LATERAL_ACCEL : HORSE.LATERAL_ACCEL;
       let vx = this.vx[i];
       let want = this.desiredVx[i];
-      if (!isPlayer && (st === HorseState.RUN || st === HorseState.AVOID) && inCorridor(this.x[i])) {
+      if (!isPlayer && (st === HorseState.RUN || st === HorseState.AVOID) && this.corridorOpen(this.x[i], this.progress[i])) {
         const edge = corridorExit(this.x[i]);
         want = edge > this.x[i] ? FIELD.CORRIDOR_EXIT_SPEED : -FIELD.CORRIDOR_EXIT_SPEED;
         if (Math.abs(this.laneTarget[i] - this.x[i]) < 3) this.laneTarget[i] = edge;
@@ -1382,7 +1470,7 @@ export class HorseSimulation {
       this.x[i] = x;
       // oval: on a turn the inside (x < 0) covers more centreline per world metre
       const k = curv(this.progress[i]);
-      this.progress[i] += k === 0 ? sp * dt : (sp * dt) / (1 + k * x);
+      this.progress[i] += k === 0 ? sp * dt : (sp * dt) / (1 + COURSE.LANE_DISTANCE_SCALE * k * x);
 
       // vertical (jumps, tumble bounces)
       let y = this.y[i];
@@ -1430,6 +1518,13 @@ export function inCorridor(x: number): boolean {
 }
 
 /** nearest x just outside the corridor containing x */
+/** lateral distance from x to the nearest corridor centre line */
+export function corridorDistance(x: number): number {
+  const sp = FIELD.CORRIDOR_SPACING;
+  const c = Math.round((x - FIELD.CORRIDOR_OFFSET) / sp) * sp + FIELD.CORRIDOR_OFFSET;
+  return Math.abs(x - c);
+}
+
 export function corridorExit(x: number): number {
   const sp = FIELD.CORRIDOR_SPACING;
   const c = Math.round((x - FIELD.CORRIDOR_OFFSET) / sp) * sp + FIELD.CORRIDOR_OFFSET;

@@ -260,8 +260,8 @@ export function resolveCollisions(sim: HorseSimulation): void {
       if (closing > 0) {
         // brushing past a downed horse (no trip) mostly deflects sideways instead of stopping;
         // the player shoulders through NPCs (they are shoved aside) rather than stopping dead
-        // (not while dashing: ramming the crowd at full tilt is just a collision)
-        const playerRear = rear === FIELD.PLAYER && state[front] !== HorseState.FALL && !sim.dashing;
+        // (dashing too — the price of ramming the crowd is the higher accident risk)
+        const playerRear = rear === FIELD.PLAYER && state[front] !== HorseState.FALL;
         speed[rear] -= closing * (downI !== downJ ? 0.2 : playerRear ? PLAYER.SHOULDER_LOSS : 0.6);
         if (playerRear) vx[front] += (x[front] >= x[rear] ? 1 : -1) * PLAYER.SHOULDER_SHOVE;
         if (state[front] !== HorseState.FALL) speed[front] += closing * 0.15;
@@ -338,6 +338,9 @@ function upright(sim: HorseSimulation, i: number, j: number, rear: number, impac
   for (let v = 0; v < 2; v++) {
     const h = v === 0 ? rear : other;
     if (sim.eventCooldown[h] > 0 || !sim.canBeKnocked(h)) continue;
+    // the player shrugs off brushing a neighbour (it is riding through a crowd on purpose);
+    // running into a horse properly still unsettles it
+    if (h === FIELD.PLAYER && impact < PLAYER.SOFT_BUMP) continue;
     sim.eventCooldown[h] = COLLISION.EVENT_COOLDOWN;
     const pv = (v === 0 ? p : p * 0.4) * playerMult(sim, h);
     if (sim.state[h] === HorseState.STUMBLE) {

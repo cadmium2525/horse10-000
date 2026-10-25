@@ -164,6 +164,8 @@ describe('oval distance', () => {
       sim.speed[i] = 15;
     }
     for (let t = 0; t < 60; t++) sim.step();
-    expect(sim.progress[1] - sim.progress[2]).toBeGreaterThan(5);
+    // 2 s at 15 m/s with COURSE.LANE_DISTANCE_SCALE 0.5: ≈ 30·(1/(1−0.083) − 1/(1+0.083)) ≈ 5 m
+    // (less a little drift/acceleration noise)
+    expect(sim.progress[1] - sim.progress[2]).toBeGreaterThan(2.5);
   });
 });

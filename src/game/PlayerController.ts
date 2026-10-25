@@ -1,4 +1,4 @@
-import { FIELD } from './Config';
+import { COURSE, FIELD, PLAYER } from './Config';
 import { HorseState, type HorseSimulation, type PlayerIntent } from './HorseSimulation';
 import type { Input } from './Input';
 
@@ -67,6 +67,8 @@ export class AutoBot {
   private readonly candidates: number[] = [];
   private noisePhase: number;
   private prevDash = false;
+  private releasedLastTick = false;
+  private heldTicks = 0;
   /** stats */
   jumpRequests = 0;
 
@@ -99,15 +101,19 @@ export class AutoBot {
     const res = sim.hash.result;
     const mySpeed = Math.max(sim.speed[p], 12);
     // turn ahead: the inside (−x) saves distance — roughly κ·x metres per metre of turn left
+    // (weighted down while the turn is still far away: there is time to move in later)
     let turnLeft = 0;
     let kAhead = 0;
-    for (let d = 0; d < 1200; d += 50) {
+    let toTurn = -1;
+    for (let d = 0; d < 1200; d += 25) {
       const k = sim.course.curvatureAt(pp + d);
       if (k > 0) {
-        turnLeft += 50;
+        if (toTurn < 0) toTurn = d;
+        turnLeft += 25;
         kAhead = k;
       }
     }
+    const turnWeight = toTurn < 0 ? 0 : Math.max(0, 1 - toTurn / 200);
 
     if (--this.replanIn <= 0) {
       this.replanIn = this.skill >= 1 ? 6 : 12;
@@ -150,7 +156,7 @@ export class AutoBot {
         }
         let score = free - Math.abs(off) * 0.15 - crossing * 1.2;
         // the outside of a turn is a long way round (~ κ·x of the remaining turn)
-        if (this.insideLine && kAhead > 0) score -= lx * kAhead * Math.min(turnLeft, 600) * 0.25;
+        if (this.insideLine && kAhead > 0) score -= lx * kAhead * Math.min(turnLeft, 600) * 0.25 * COURSE.LANE_DISTANCE_SCALE * turnWeight;
         if (Math.abs(lx - this.laneTarget) < 0.5) currentScore = score;
         if (score > bestScore) {
           bestScore = score;
@@ -164,8 +170,11 @@ export class AutoBot {
     // only if the landing zone (≈ airtime × speed ahead) is clear of downed horses
     let jump = false;
     let clear = look;
-    const jumpAt = 2.4 + mySpeed * 0.18;
-    const landAt = mySpeed * 0.78;
+    // a pile seen seconds ahead is a predictable event: a human times the jump for their own
+    // latency (only surprises suffer the full reaction delay)
+    const lead = (mySpeed * this.delayTicks) / 30;
+    const jumpAt = 2.4 + mySpeed * 0.18 + lead;
+    const landAt = mySpeed * 0.78 + lead;
     let landingBlocked = false;
     let nearestDown = Infinity;
     let nearestDownX = 0;
@@ -193,14 +202,18 @@ export class AutoBot {
       const j = res[r];
       if (j === p || sim.state[j] === HorseState.FALL) continue;
       const d = sim.progress[j] - pp;
-      if (d > -1 && d < 10 && Math.abs(sim.x[j] - px) < 2.2) clear = Math.min(clear, Math.max(0, d));
+      // (horses alongside don't matter, the ones we would cut in front of diagonally do)
+      if (d > 1.5 && d < 6 && Math.abs(sim.x[j] - px) < 1.6) clear = Math.min(clear, d + 3);
     }
     if (landingBlocked) jump = false;
     // emergency: a downed horse right ahead that we are not jumping -> swerve
     let swerve = 0;
     if (!jump && nearestDown < jumpAt + 1 && !(sim.y[p] > 0)) swerve = px >= nearestDownX ? 1 : -1;
     if (jump) this.jumpRequests++;
-    let steer = swerve !== 0 ? swerve : (this.laneTarget - px) * 0.7;
+    // steer for where we will be when the (delayed) command lands — humans anticipate their
+    // own latency instead of oscillating round the target
+    const predictedX = px + (sim.vx[p] * this.delayTicks) / 30;
+    let steer = swerve !== 0 ? swerve : (this.laneTarget - predictedX) * 0.7;
     if (this.noise > 0) {
       this.noisePhase += 0.07;
       steer += this.noise * (Math.sin(this.noisePhase) + 0.5 * Math.sin(this.noisePhase * 2.3 + 1));
@@ -211,9 +224,25 @@ export class AutoBot {
     if (this.dashMode === 'hold') dash = true;
     else if (this.dashMode === 'never') dash = false;
     else {
-      const want = (clear > 14 && sim.dashGauge > 0.3) || (homeStraight && sim.dashGauge > 0.25);
-      // keep holding while it pays; a new dash needs a fresh press
-      dash = sim.dashing ? clear > 7 || homeStraight : want && !this.prevDash;
+      // a full gauge is wasted regen: use it on any half-open lane
+      const want = (clear > (sim.dashGauge > 0.6 ? 4.5 : 7) && sim.dashGauge > 0.3) || (homeStraight && sim.dashGauge > 0.25);
+      // keep holding while it pays, but let go before running dry (winded) — except for the
+      // final sprint; a new dash needs a fresh press
+      const finalSprint = sim.course.length - pp < 90;
+      // (no dash while still getting up to speed: it would just burn the gauge)
+      const upToSpeed = sim.speed[p] > PLAYER.CRUISE_SPEED - 3;
+      // the bot tracks its own button (with a reaction delay the sim only sees it later)
+      if (this.prevDash) {
+        this.heldTicks++;
+        const started = sim.dashing || this.heldTicks <= this.delayTicks + 2;
+        // (a human lets go early enough for their own reaction time)
+        const reserve = 0.06 + (PLAYER.DASH_DRAIN * this.delayTicks) / 30;
+        dash = started && (clear > 4 || homeStraight) && (sim.dashGauge > reserve || finalSprint);
+      } else {
+        dash = want && upToSpeed && !this.releasedLastTick;
+        this.heldTicks = 0;
+      }
+      this.releasedLastTick = this.prevDash && !dash;
     }
     this.prevDash = dash;
     return { steer, jump, dash };

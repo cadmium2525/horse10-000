@@ -27,7 +27,15 @@ export const COURSE = {
   /** start line (front of the grid) to the first turn */
   START_TO_TURN: 120,
   /** turn exit to the finish line on the home straight */
-  HOME_TO_FINISH: 230,
+  HOME_TO_FINISH: 200,
+  /**
+   * share of the true inside/outside distance difference the race counts (1 = exact
+   * geometry, progress += v / (1 + κx)). The track is ~5× wider than a real one to hold
+   * 10,000 horses; at full geometry running 30 m off the rail costs ~94 m (4 s) per turn
+   * and the rail is the only line. Scaled, the rail is still shorter but a free outside
+   * line can compete with a jammed inside (Phase 1b review M2).
+   */
+  LANE_DISTANCE_SCALE: 0.7,
 } as const;
 
 export const FIELD = {
@@ -48,10 +56,17 @@ export const FIELD = {
    * CORRIDOR_HALF m half-width, centred CORRIDOR_OFFSET m off the centre line so the player
    * does not start in one). NPC lane changes avoid them; a skilled player rides them.
    */
-  CORRIDOR_SPACING: 25,
+  CORRIDOR_SPACING: 16,
   CORRIDOR_HALF: 1.2,
-  CORRIDOR_OFFSET: 12.5,
-  CORRIDOR_FROM_ROW: 10,
+  CORRIDOR_OFFSET: 8,
+  CORRIDOR_FROM_ROW: 6,
+  /**
+   * corridors whose centre lies within this many metres of the inside rail close on a turn
+   * and CORRIDOR_CLOSE_BEFORE m before it: the field packs the rail there (inside = short but
+   * jammed, outside corridors stay open = long but free)
+   */
+  CORRIDOR_INNER_CLOSE: 150,
+  CORRIDOR_CLOSE_BEFORE: 120,
   /** lateral speed (m/s) at which upright NPCs leave a corridor */
   CORRIDOR_EXIT_SPEED: 1.2,
   /** player starts this far behind the last row */
@@ -74,12 +89,15 @@ export const HORSE = {
   /** tallest pile (m): 3 layers. Player jump peak is 1.6 m => 0–1 layers are jumpable */
   PILE_MAX: 1.8,
 
-  NPC_SPEED_MIN: 12.7,
-  NPC_SPEED_MAX: 14.7,
+  NPC_SPEED_MIN: 13.45,
+  NPC_SPEED_MAX: 15.55,
   /** share of base speed decided by start row: front rows are faster, so the field fans
    *  out instead of locking into a solid block, and difficulty rises towards the front */
   FRONT_BIAS: 0.75,
   PACE_AMPLITUDE: 0.03,
+  /** NPC stamina: pace drops linearly by up to FADE over the last FADE_DIST m */
+  FADE: 0.18,
+  FADE_DIST: 500,
   ACCEL: 4.5,
   /** acceleration below 4 m/s */
   ACCEL_LOW: 8,
@@ -106,40 +124,44 @@ export const HORSE = {
 } as const;
 
 export const PLAYER = {
-  CRUISE_SPEED: 22.2,
-  DASH_SPEED: 25,
-  ACCEL: 6,
+  CRUISE_SPEED: 26.5,
+  DASH_SPEED: 31.5,
+  ACCEL: 7,
+  /** acceleration while dashing (the burst must be felt within a 2 s gauge) */
+  DASH_ACCEL: 14,
   LATERAL_MAX: 7.5,
   LATERAL_ACCEL: 30,
   JUMP_VY: 8,
   JUMP_COOLDOWN: 0.35,
   DASH_DRAIN: 0.5, // gauge / s (full gauge = 2 s)
   /** slow natural refill: jumps, near misses and passes are the real fuel (review M4) */
-  DASH_REGEN: 0.08,
+  DASH_REGEN: 0.16,
   DASH_MIN_TO_START: 0.25,
   /** running the gauge dry: winded for this long at cruise × factor */
   WINDED_TIME: 1.0,
   WINDED_FACTOR: 0.85,
   /** an upright horse this close ahead in the lane cancels the dash bonus (gauge still drains) */
-  DASH_CLEAR_AHEAD: 6,
+  DASH_CLEAR_AHEAD: 3,
   /** accident multipliers while dashing (contact stumbles/trips, landing on a downed horse) */
-  DASH_RISK: 1.9,
+  DASH_RISK: 1.7,
   DASH_LANDING_RISK: 1.3,
   /** gauge refills */
   JUMP_CLEAR_GAUGE: 0.5,
   NEAR_MISS_GAUGE: 0.05,
   PASS_GAUGE: 0.0012,
   /** forward-speed loss at full lateral speed (fraction) */
-  STEER_DRAG: 0.2,
+  STEER_DRAG: 0.06,
   /** clearing a downed horse / low pile gives a short burst */
-  JUMP_BOOST: 6,
+  JUMP_BOOST: 8,
   JUMP_BOOST_TIME: 2.5,
   /** share of the closing speed the player loses when hitting an NPC from behind */
-  SHOULDER_LOSS: 0.55,
+  SHOULDER_LOSS: 0.25,
   /** lateral shove (m/s) given to an NPC the player runs into */
-  SHOULDER_SHOVE: 0.6,
+  SHOULDER_SHOVE: 1.0,
+  /** contacts softer than this (m/s) never unsettle the player (side brushes in a crowd) */
+  SOFT_BUMP: 1.8,
   /** probability multiplier on accidental stumbles (player-friendly) */
-  STUMBLE_MULT: 0.95,
+  STUMBLE_MULT: 0.8,
 } as const;
 
 /**
@@ -156,6 +178,9 @@ export interface SimTuning {
   chainDecay: number;
   /** seconds after the gates open over which accident rates ramp up from 15 % to 100 % */
   startGrace: number;
+  /** spontaneous accidents (missteps, far-field and lead-pack falls, scripted crashes); 0 = only
+   *  contact chains (tests isolate one chain with it) */
+  background: number;
 }
 
 export const DEFAULT_TUNING: Readonly<SimTuning> = {
@@ -163,6 +188,7 @@ export const DEFAULT_TUNING: Readonly<SimTuning> = {
   avoidSkill: 1,
   chainDecay: 0.75,
   startGrace: 3,
+  background: 1,
 };
 
 export const COLLISION = {
@@ -258,10 +284,25 @@ export const LOD = {
   /** group fall hazard per C decision, scaled by (density / DENSITY_REF)² */
   C_FALL_HAZARD: 0.000008,
   /** per far-field decision on/near a turn: chance to move one lane towards the inside */
-  INWARD_DRIFT: 0.02,
+  INWARD_DRIFT: 0.35,
+  /** lateral step (m) of one inward squeeze, and the closest side-by-side spacing it allows */
+  DRIFT_STEP: 0.8,
+  DRIFT_MIN_SPACING: 0.98,
+  /**
+   * horses within DRIFT_REACH m of the inside rail drift in; the pull fades out linearly over
+   * the outer DRIFT_FADE m of that reach, so the field thins gradually towards the outside
+   * (no empty band where the drift stops)
+   */
+  DRIFT_REACH: 150,
+  DRIFT_FADE: 110,
+  /** ... starting this far before the turn (m) */
+  INWARD_LEAD: 300,
+  /** accident hazard multiplier near the inside rail on a turn (packed and jostling) */
+  RAIL_HAZARD_MULT: 2,
+  RAIL_BAND: 20,
   /** the leading LEAD_PACK horses get an extra accident hazard (per second) */
   LEAD_PACK: 300,
-  LEAD_HAZARD: 0.0015,
+  LEAD_HAZARD: 0.003,
   C_FALL_CLUSTER_RADIUS: 4,
 } as const;
 
@@ -278,12 +319,15 @@ export const DIRECTOR = {
   AHEAD_MIN: 32,
   AHEAD_MAX: 65,
   /** scripted piles stay down longer so the player actually reaches them (jump or go round) */
-  DOWN_SCALE: 2.4,
+  DOWN_SCALE: 1.6,
   SIDE: 22,
   RADIUS: 8,
   CHANCE: 0.55,
+  /** in-line events: wider and sparser (low, jumpable piles) */
+  LINE_RADIUS: 9,
+  LINE_CHANCE: 0.3,
   /** share of events placed across the player's own line */
-  IN_LINE: 0.75,
+  IN_LINE: 0.6,
 } as const;
 
 export const RACE = {

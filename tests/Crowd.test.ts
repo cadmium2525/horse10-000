@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Course } from '../src/data/Course';
 import { HorseSimulation, HorseState, Layer } from '../src/game/HorseSimulation';
 import { AutoBot } from '../src/game/PlayerController';
-import { SIM } from '../src/game/Config';
+import { COURSE, SIM } from '../src/game/Config';
 
 const log = (s: string) =>
   (globalThis as { process?: { stderr: { write(s: string): void } } }).process?.stderr.write(s + '\n');
@@ -41,8 +41,8 @@ describe('M1: far-field crowd has no deep overlaps and no teleports', () => {
       // displacement beyond what the horse's own speed explains (=> visible teleport)
       for (let i = 0; i < sim.n; i++) {
         const lat = Math.abs(sim.x[i] - sim.prevX[i]) - 7.5 * SIM.DT;
-        // (on the oval's turns progress advances by speed / (1 + κ·x))
-        const k = sim.course.curvatureAt(sim.prevProgress[i]);
+        // (on the oval's turns progress advances by speed / (1 + s·κ·x), s = LANE_DISTANCE_SCALE)
+        const k = sim.course.curvatureAt(sim.prevProgress[i]) * COURSE.LANE_DISTANCE_SCALE;
         const lon = Math.abs(sim.progress[i] - sim.prevProgress[i] - (sim.speed[i] * SIM.DT) / (1 + k * sim.x[i]));
         const j = Math.max(lat, lon);
         if (j > maxJump) maxJump = j;
@@ -59,9 +59,9 @@ describe('M1: far-field crowd has no deep overlaps and no teleports', () => {
 describe('M2: chain reactions stay local', () => {
   it('one fall inside a dense pack causes a bounded chain (5–60 falls nearby)', () => {
     const sizes: number[] = [];
-    for (const seed of [1, 2, 3, 4, 5, 6]) {
-      // no spontaneous accidents: only the seeded fall and what it triggers
-      const sim = new HorseSimulation(new Course(seed), seed, undefined, { startGrace: 0 });
+    // no spontaneous accidents (background 0): only the seeded fall and what it triggers
+    const nearbyFalls = (seed: number, seeded: boolean): number => {
+      const sim = new HorseSimulation(new Course(seed), seed, undefined, { startGrace: 0, background: 0 });
       for (let t = 0; t < 30 * 4; t++) sim.step();
       // pick a running horse ~12 m ahead of the player (inside layer A/B)
       let target = -1;
@@ -77,7 +77,7 @@ describe('M2: chain reactions stay local', () => {
       const tx = sim.x[target];
       const tp = sim.progress[target];
       const before = new Uint16Array(sim.fallCount);
-      sim.fall(target);
+      if (seeded) sim.fall(target);
       for (let t = 0; t < 30 * 6; t++) sim.step();
       let nearby = 0;
       for (let i = 1; i < sim.n; i++) {
@@ -86,8 +86,9 @@ describe('M2: chain reactions stay local', () => {
         const dp = sim.progress[i] - tp;
         if (Math.abs(dx) < 25 && dp > -30 && dp < 120) nearby++;
       }
-      sizes.push(nearby);
-    }
+      return nearby;
+    };
+    for (const seed of [1, 2, 3, 4, 5, 6]) sizes.push(nearbyFalls(seed, true));
     log(`M2: chain sizes ${sizes.join(', ')}`);
     for (const s of sizes) expect(s).toBeLessThanOrEqual(60);
     const mean = sizes.reduce((a, b) => a + b, 0) / sizes.length;
@@ -157,13 +158,14 @@ describe('R1: no standing traffic jams behind downed horses', () => {
     return { longest, peak, falls: sim.fallsTotal };
   }
 
-  // The scripted big accidents (M3) leave short queues of 30–60 horses behind a pile for ~1 s
-  // while they detour/hop; what R1 forbids is a long-lived jam, hence the 2.5 s cap.
-  it('normal race (bot player): no upright NPC stopped > 2.5 s, ≤ 60 standing (≥ 0.5 s) at once', () => {
+  // The scripted big accidents leave short queues of 30–60 horses behind a pile for ~1 s
+  // while they detour/hop; what R1 forbids is a long-lived jam, hence the 2.0 s cap
+  // (Phase 1b review: accepted 60 with the cap tightened from 2.5 s).
+  it('normal race (bot player): no upright NPC stopped > 2.0 s, ≤ 60 standing (≥ 0.5 s) at once', () => {
     for (const seed of [1234, 9, 77]) {
       const r = measure(seed, true);
       log(`R1: seed ${seed} (bot) longest upright stop ${r.longest.toFixed(2)} s, peak simultaneous ${r.peak}, falls ${r.falls}`);
-      expect(r.longest).toBeLessThanOrEqual(2.5);
+      expect(r.longest).toBeLessThanOrEqual(2.0);
       expect(r.peak).toBeLessThanOrEqual(60);
     }
   }, 300000);
@@ -172,9 +174,10 @@ describe('R1: no standing traffic jams behind downed horses', () => {
     for (const seed of [1234, 9]) {
       const r = measure(seed, false);
       log(`R1: seed ${seed} (passive) longest upright stop ${r.longest.toFixed(2)} s, peak simultaneous ${r.peak}, falls ${r.falls}`);
-      // (worst case: the player keeps feeding the pile it is stuck in)
-      expect(r.longest).toBeLessThanOrEqual(3.0);
-      expect(r.peak).toBeLessThanOrEqual(30);
+      // (worst case: the player keeps feeding the pile it is stuck in; the packed inside rail
+      // on the turn queues behind its own piles — intended, review M2 — but never for long)
+      expect(r.longest).toBeLessThanOrEqual(2.0);
+      expect(r.peak).toBeLessThanOrEqual(60);
     }
   }, 300000);
 });

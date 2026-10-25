@@ -1,10 +1,26 @@
 import { Course } from '../../src/data/Course';
-import { FIELD } from '../../src/game/Config';
+import { FIELD, RACE } from '../../src/game/Config';
 import { HorseSimulation, HorseState } from '../../src/game/HorseSimulation';
 import { AutoBot, type BotOptions } from '../../src/game/PlayerController';
 import { computeRank } from '../../src/game/Race';
 
-export const DIFFICULTY_SEEDS = [1234, 9, 77, 5, 42];
+/**
+ * Balance seeds. The first five are the Phase 1 set; outcomes per seed are chaotic (any
+ * difference in the player's line reshuffles every accident downstream), so rate-type
+ * claims ("wins 3 of 5") are checked over all ten with the same proportion.
+ */
+export const DIFFICULTY_SEEDS = [1234, 9, 77, 5, 42, 11, 23, 314, 2718, 99];
+/** the original five (cheaper checks that are not rates) */
+export const CORE_SEEDS = DIFFICULTY_SEEDS.slice(0, 5);
+
+/** bot proxies (Phase 1b review): optimal play and humans with a reaction delay + steering noise */
+export const OPTIMAL: BotOptions = {};
+export const HUMAN_150: BotOptions = { reactionMs: 150, noise: 0.15 };
+export const HUMAN_250: BotOptions = { reactionMs: 250, noise: 0.25 };
+
+export function wins(runs: RaceRun[]): number {
+  return runs.filter((r) => r.rank === 1).length;
+}
 
 export interface RaceRun {
   seed: number;
@@ -21,10 +37,20 @@ export interface RaceRun {
   firstBig: number;
   /** jump opportunities: a low downed horse appears 3–12 m ahead in the player's lane */
   jumpChances: number;
+  /** rank 30 s after the gates open (start rank = field size) */
+  rank30: number;
+  /** finish time minus the winner's finish time (0 when we won) */
+  gap: number;
+  /** share of the player's time on the turns spent within 35 m of the inside rail */
+  insideShare: number;
+  /** density of the inner 20 m of the track / mean density across the width (field on the turn) */
+  innerDensity: number;
+  /** share of racing time spent dashing */
+  dashShare: number;
 }
 
 /** Full 10,000-horse race with a bot player (null = no input). Deterministic. */
-export function runRace(seed: number, opts: BotOptions | null, maxSeconds = 130): RaceRun {
+export function runRace(seed: number, opts: BotOptions | null, maxSeconds: number = RACE.TIME_LIMIT): RaceRun {
   const sim = new HorseSimulation(new Course(seed), seed);
   const bot = opts ? new AutoBot({ ...opts, seed }) : null;
   const p = FIELD.PLAYER;
@@ -36,10 +62,35 @@ export function runRace(seed: number, opts: BotOptions | null, maxSeconds = 130)
   let jumpChances = 0;
   let chanceActive = false;
   const prev = new Uint16Array(sim.n);
+  let rank30 = sim.n;
+  let turnTicks = 0;
+  let insideTicks = 0;
+  let dashTicks = 0;
+  let raceTicks = 0;
+  const innerSamples: number[] = [];
+  const half = sim.course.width / 2;
   for (let t = 0; t < 30 * maxSeconds && sim.finishTime[p] < 0; t++) {
     prev.set(sim.fallCount);
     sim.step(bot ? bot.decide(sim) : undefined);
     if (!sim.started) continue;
+    raceTicks++;
+    if (sim.dashing) dashTicks++;
+    if (sim.course.curvatureAt(sim.progress[p]) > 0) {
+      turnTicks++;
+      if (sim.x[p] < -half + 35) insideTicks++;
+    }
+    if (rank30 === sim.n && sim.raceTime >= 30) rank30 = computeRank(sim, p);
+    if (sim.tick % 150 === 0) {
+      // field density across the width, for horses on a turn
+      let inner = 0;
+      let all = 0;
+      for (let i = 1; i < sim.n; i++) {
+        if (sim.finishTime[i] >= 0 || sim.course.curvatureAt(sim.progress[i]) <= 0) continue;
+        all++;
+        if (sim.x[i] < -half + 20) inner++;
+      }
+      if (all > 2000) innerSamples.push(inner / 20 / (all / sim.course.width));
+    }
     let down = 0;
     let lowAhead = false;
     for (let i = 1; i < sim.n; i++) {
@@ -63,7 +114,15 @@ export function runRace(seed: number, opts: BotOptions | null, maxSeconds = 130)
     }
   }
   const rank = computeRank(sim, p);
+  let winner = Infinity;
+  for (let i = 0; i < sim.n; i++) if (sim.finishTime[i] >= 0 && sim.finishTime[i] < winner) winner = sim.finishTime[i];
+  const myTime = sim.finishTime[p] >= 0 ? sim.finishTime[p] : sim.raceTime;
   return {
+    rank30,
+    gap: Math.max(0, myTime - winner),
+    insideShare: turnTicks ? insideTicks / turnTicks : 0,
+    innerDensity: innerSamples.length ? mean(innerSamples) : 0,
+    dashShare: raceTicks ? dashTicks / raceTicks : 0,
     seed,
     rank,
     time: sim.finishTime[p],
@@ -91,6 +150,6 @@ export function report(label: string, runs: RaceRun[]): void {
   (globalThis as { process?: { stderr: { write(s: string): void } } }).process?.stderr.write(
     `${label}: ranks ${runs.map((r) => r.rank).join(', ')} | falls ${runs.map((r) => r.falls).join(',')} | jumps ${runs
       .map((r) => `${r.jumps}/${r.jumpsCleared}`)
-      .join(',')} | big ${runs.map((r) => r.bigFalls).join(',')} | first big ${runs.map((r) => r.firstBig.toFixed(1)).join(',')} | chances ${runs.map((r) => r.jumpChances).join(',')} | late vis/10s ${runs.map((r) => (r.visible.slice(4, -1).reduce((a, b) => a + b, 0) / Math.max(1, r.visible.length - 5)).toFixed(0)).join(',')}\n`,
+      .join(',')} | big ${runs.map((r) => r.bigFalls).join(',')} | first big ${runs.map((r) => r.firstBig.toFixed(1)).join(',')} | chances ${runs.map((r) => r.jumpChances).join(',')} | r30 ${runs.map((r) => r.rank30).join(',')} | gap ${runs.map((r) => r.gap.toFixed(1)).join(',')} | inside ${runs.map((r) => r.insideShare.toFixed(2)).join(',')} | innerDens ${runs.map((r) => r.innerDensity.toFixed(2)).join(',')} | dash ${runs.map((r) => r.dashShare.toFixed(2)).join(',')} | late vis/10s ${runs.map((r) => (r.visible.slice(4, -1).reduce((a, b) => a + b, 0) / Math.max(1, r.visible.length - 5)).toFixed(0)).join(',')}\n`,
   );
 }

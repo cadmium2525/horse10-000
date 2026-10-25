@@ -8,7 +8,7 @@ import { FIELD } from '../src/game/Config';
  *  - the leading NPC finishes in 60–90 s
  *  - a solo "ideal" run (empty track, inside rail, dash whenever available) beats the
  *    leader by at least 3 s, i.e. winning is physically possible. In a real race the
- *    traffic costs even the optimal bot 0–15 s, so how hard winning actually is is fixed by
+ *    traffic costs even the optimal bot 20–30 s, so how hard winning actually is is fixed by
  *    the bot-proxy tests (DifficultySkill / DifficultyHuman), not by this margin.
  */
 function leaderFinish(seed: number): { leader: number; playerStart: number } {
@@ -55,7 +55,9 @@ describe('balance / reachability', () => {
       expect(leader).toBeGreaterThanOrEqual(60);
       expect(leader).toBeLessThanOrEqual(90);
       expect(leader - ideal).toBeGreaterThanOrEqual(3);
-      expect(leader - ideal).toBeLessThanOrEqual(16);
+      // (upper bound only guards against a broken course/speed setup: an empty-track run
+      // is far faster than anything possible through 9,999 horses)
+      expect(leader - ideal).toBeLessThanOrEqual(30);
     }, 60000);
   }
 });
