@@ -3,9 +3,13 @@
  * keep gameplay numbers in this one place so balancing does not require
  * touching logic.
  *
- * Balance invariants (enforced by tests/Balance.test.ts):
- *  - the leading NPC finishes in 60–90 s
- *  - an ideal player run (no contact, optimal dash) finishes ≥ 8 s before the leader
+ * Balance invariants:
+ *  - tests/Balance.test.ts: the leading NPC finishes in 60–90 s; an ideal solo run (empty
+ *    track, inside rail, dash) beats it by 3–30 s (winning is physically possible)
+ *  - how hard winning actually is is pinned by bot proxies over 10 seeds
+ *    (tests/Difficulty*.test.ts): optimal bot wins ≥ 50 % with PERFECT ≤ 40 %, 150 ms proxy
+ *    can win, 250 ms proxy wins ≤ 20 % with median rank 30–300, never-dash / dash-held /
+ *    no-jump / no-input play ends clearly lower
  */
 export const SIM = {
   /** fixed simulation rate */

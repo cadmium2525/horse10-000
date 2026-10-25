@@ -109,7 +109,8 @@ export class Hazards {
         this.markers.setMatrixAt(nm, this.m);
         this.markers.setColorAt(nm, top > JUMPABLE_TOP ? this.red : this.yellow);
         nm++;
-        if (dp > 8) {
+        // diamonds only for what is close enough to act on (rings carry the far warnings)
+        if (dp > 8 && dp < 85) {
           const bs = 0.8 + dist / 70;
           this.q.setFromAxisAngle(up, this.time * 2 + i);
           this.v.set(this.tmp[0], 3.0 + top + bs * 0.6 + (reduceMotion ? 0 : Math.sin(this.time * 4 + i) * 0.2), this.tmp[1]);

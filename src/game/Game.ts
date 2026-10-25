@@ -15,7 +15,7 @@ import { FIELD, RACE, SIM } from './Config';
 import { HorseSimulation, HorseState, Layer, STATE_NAMES } from './HorseSimulation';
 import { Input } from './Input';
 import { FixedStepper } from './Loop';
-import { PlayerController } from './PlayerController';
+import { AutoBot, PlayerController } from './PlayerController';
 import { RaceStats, computeRank, makeResult, type RaceResult } from './Race';
 
 export interface GameOptions {
@@ -92,6 +92,8 @@ export class Game {
   private prevJumpsCleared = 0;
   private prevNearMisses = 0;
   private prevWinded = false;
+  private warmSim: HorseSimulation | null = null;
+  private warmBot: AutoBot | null = null;
 
   // timing statistics (exponentially smoothed)
   readonly timing = { simMsPerTick: 0, ticksPerFrame: 1, fps: 0, frameMs: 16, prepMs: 0, drawMs: 0, cpuMs: 0 };
@@ -194,6 +196,11 @@ export class Game {
     this.raceStartProgress = this.sim.progress[FIELD.PLAYER];
     this.result = null;
     this.phase = 'intro';
+    // JIT warm-up for the gate-open spike: a small throwaway race (its own course/seed, so the
+    // real race is untouched) runs through the start and the first seconds of racing during
+    // the countdown, so the race-time code paths are compiled before the gates open
+    this.warmSim = new HorseSimulation(new Course(seed ^ 0x5bd1e995), seed ^ 0x5bd1e995, 1200);
+    this.warmBot = new AutoBot({ seed });
     this.finishTimer = 0;
     this.prevPlayerY = 0;
     this.prevPlayerFalls = 0;
@@ -418,9 +425,13 @@ export class Game {
     const p = FIELD.PLAYER;
     const t = sim.raceTime;
     if (this.phase === 'intro') {
+      const w = this.warmSim;
+      if (w && this.warmBot) for (let k = 0; k < 3 && w.raceTime < FIELD.START_DELAY; k++) w.step(this.warmBot.decide(w));
       const prev = t - SIM.DT;
       for (const mark of [-2, -1, 0]) if (prev < mark && t >= mark) this.sound.countdown(-mark);
       if (sim.started) {
+        this.warmSim = null;
+        this.warmBot = null;
         this.phase = 'racing';
         this.world.rig.setMode('chase'); // eases in from wherever the intro shot is
       }

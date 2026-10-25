@@ -297,8 +297,11 @@ body {
   white-space: nowrap;
 }
 .rank-num {
-  transform-origin: left center;
+  /* the bump grows away from "/10,000"; tabular digits keep the width steady */
+  transform-origin: right center;
   display: inline-block;
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
   font-size: clamp(34px, 6.5vw, 56px);
   line-height: 1;
   color: var(--yellow);
@@ -767,4 +770,14 @@ body:not(.touch) .btn-fullscreen {
 }
 .hud-toast.bad {
   color: #ffb0b0;
+}
+
+.result-hint {
+  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: rgba(255, 214, 0, 0.25);
+  border-radius: 10px;
+  padding: 8px 12px;
 }

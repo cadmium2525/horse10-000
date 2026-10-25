@@ -16,6 +16,7 @@ export interface FollowTarget {
 export interface CameraCourse {
   toWorld(x: number, s: number, out: number[] | Float32Array): void;
   infieldCenter(out: number[] | Float32Array): void;
+  curvatureAt?(s: number): number;
 }
 
 export type CameraMode = 'title' | 'intro' | 'chase' | 'finish';
@@ -53,6 +54,7 @@ export class CameraRig {
   distance = 10.5;
   height = 6.2;
   lookAhead = 18;
+  private turnBlend = 0;
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(60, aspect, 0.3, 3200);
@@ -128,8 +130,14 @@ export class CameraRig {
       // follow the course: camera on the centreline-parallel curve behind the player,
       // looking at a point ahead on the course (so it sees round the turn)
       if (this.course) {
-        this.course.toWorld(t.cx, t.cs - dist, this.tmpA);
-        this.course.toWorld(t.cx, t.cs + this.lookAhead, this.tmpB);
+        // on (and just before) a turn look further round it and towards the inside, so the
+        // rail curve and the infield landmarks are in view — the turn reads as a turn
+        const c = this.course.curvatureAt;
+        const onTurn = c ? Math.max(c.call(this.course, t.cs), c.call(this.course, t.cs + 60)) > 0 : false;
+        this.turnBlend += ((onTurn ? 1 : 0) - this.turnBlend) * k(1.2);
+        const ahead = this.lookAhead * (1 + this.turnBlend * 1.2);
+        this.course.toWorld(t.cx + this.turnBlend * 2.5, t.cs - dist, this.tmpA);
+        this.course.toWorld(t.cx - this.turnBlend * 14, t.cs + ahead, this.tmpB);
         tx = this.tmpA[0];
         tz = this.tmpA[1];
         lx = this.tmpB[0];
@@ -145,18 +153,22 @@ export class CameraRig {
       if (this.mode === 'intro' && this.course) {
         // establishing shot from above the infield (the oval and the whole field) easing
         // down into the chase camera over the start sequence
-        const u = Math.min(1, this.modeTime / (this.introLength * 0.85));
+        // hold a high shot of the whole oval (infield, both turns, the 10,000-horse band on
+        // the back straight) for the first part, then swoop down behind the player
+        const u = Math.max(0, Math.min(1, (this.modeTime - this.introLength * 0.3) / (this.introLength * 0.6)));
         const e = u * u * (3 - 2 * u);
         this.course.infieldCenter(this.centre);
-        this.course.toWorld(0, t.cs + 120, this.tmpB);
-        const sx = this.centre[0] * 0.55 + this.tmpB[0] * 0.45;
-        const sz = this.centre[1] * 0.55 + this.tmpB[1] * 0.45;
+        this.course.toWorld(0, t.cs + 150, this.tmpB);
+        // camera above the far side of the infield, looking across it at the field
+        const sx = this.centre[0] * 1.45 - this.tmpB[0] * 0.45;
+        const sz = this.centre[1] * 1.45 - this.tmpB[1] * 0.45;
         tx = sx + (tx - sx) * e;
         tz = sz + (tz - sz) * e;
-        ty = 230 + (ty - 230) * e;
-        this.course.toWorld(0, t.cs + 140, this.tmpB);
-        lx = this.tmpB[0] + (lx - this.tmpB[0]) * e;
-        lz = this.tmpB[1] + (lz - this.tmpB[1]) * e;
+        ty = 560 + (ty - 560) * e;
+        const fx = this.centre[0] * 0.35 + this.tmpB[0] * 0.65;
+        const fz = this.centre[1] * 0.35 + this.tmpB[1] * 0.65;
+        lx = fx + (lx - fx) * e;
+        lz = fz + (lz - fz) * e;
         ly = ly * e;
         rate = 30;
       }
