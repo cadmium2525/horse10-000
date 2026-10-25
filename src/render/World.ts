@@ -1,0 +1,111 @@
+import * as THREE from 'three';
+import type { Course } from '../data/Course';
+import type { HorseSimulation } from '../game/HorseSimulation';
+import { CameraRig } from './CameraRig';
+import { Environment, SKY } from './Environment';
+import { HorseRenderer, PLAYER_COLORS } from './HorseLOD';
+import { LOD_LEVELS, type QualityState } from './Quality';
+
+/**
+ * Three.js scene owner. Knows nothing about game rules: it reads the simulation
+ * arrays (interpolated with `alpha`) and draws them.
+ */
+export class World {
+  readonly renderer: THREE.WebGLRenderer;
+  readonly scene = new THREE.Scene();
+  readonly rig: CameraRig;
+  readonly horses: HorseRenderer;
+  readonly env: Environment;
+  private readonly marker: THREE.Mesh;
+  private markerTime = 0;
+  /** last measured CPU cost (ms) */
+  prepMs = 0;
+  drawMs = 0;
+
+  constructor(
+    readonly canvasParent: HTMLElement,
+    sim: HorseSimulation,
+    readonly course: Course,
+  ) {
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.setClearColor(SKY.fog);
+    this.renderer.domElement.id = 'game-canvas';
+    canvasParent.appendChild(this.renderer.domElement);
+
+    this.scene.fog = new THREE.Fog(SKY.fog, 160, 1350);
+    this.scene.background = null;
+
+    const hemi = new THREE.HemisphereLight(0xdcefff, 0x6f9a45, 1.6);
+    const sun = new THREE.DirectionalLight(0xfff1d6, 2.2);
+    sun.position.set(-0.6, 1, 0.35);
+    this.scene.add(hemi, sun);
+
+    this.env = new Environment(course);
+    this.scene.add(this.env.group);
+
+    this.horses = new HorseRenderer(sim, course);
+    this.scene.add(this.horses.group);
+
+    // floating marker above the player so they can be found in the crowd
+    const mGeo = new THREE.ConeGeometry(0.32, 0.6, 4);
+    mGeo.rotateX(Math.PI);
+    this.marker = new THREE.Mesh(
+      mGeo,
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(PLAYER_COLORS.silkA), fog: false }),
+    );
+    this.scene.add(this.marker);
+
+    this.rig = new CameraRig(1);
+    this.resize();
+  }
+
+  resize(): void {
+    const w = this.canvasParent.clientWidth || window.innerWidth;
+    const h = this.canvasParent.clientHeight || window.innerHeight;
+    this.renderer.setSize(w, h, false);
+    this.renderer.domElement.style.width = '100%';
+    this.renderer.domElement.style.height = '100%';
+    this.rig.resize(w / h);
+  }
+
+  applyQuality(q: QualityState): void {
+    this.renderer.setPixelRatio(q.pixelRatio);
+    this.resize();
+    Object.assign(this.horses.settings, LOD_LEVELS[Math.max(0, Math.min(LOD_LEVELS.length - 1, q.level))]);
+  }
+
+  /** Swap in a fresh simulation (restart). Must share the same seed/course. */
+  setSimulation(sim: HorseSimulation): void {
+    this.horses.rebind(sim);
+    this.rig.reset();
+  }
+
+  render(alpha: number, dt: number): void {
+    const t0 = performance.now();
+    this.horses.updatePlayerPose(alpha);
+    const pp = this.horses.playerPose;
+    this.rig.update(pp, dt);
+    this.env.follow(this.rig.camera);
+    this.horses.update(alpha, this.rig.camera);
+
+    this.markerTime += dt;
+    this.marker.position.set(pp.x, pp.y + 3.1 + Math.sin(this.markerTime * 4) * 0.12, pp.z);
+    this.marker.rotation.y = this.markerTime * 2;
+    const t1 = performance.now();
+    this.renderer.render(this.scene, this.rig.camera);
+    const t2 = performance.now();
+    this.prepMs = t1 - t0;
+    this.drawMs = t2 - t1;
+  }
+
+  dispose(): void {
+    this.horses.dispose();
+    this.renderer.dispose();
+    this.renderer.domElement.remove();
+  }
+
+  get info() {
+    return this.renderer.info.render;
+  }
+}
