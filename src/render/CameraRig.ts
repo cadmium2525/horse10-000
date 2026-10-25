@@ -7,6 +7,15 @@ export interface FollowTarget {
   /** course heading at the target (rad, 0 = +Z) */
   heading: number;
   speed: number;
+  /** course-space position of the target (lateral, progress) */
+  cx: number;
+  cs: number;
+}
+
+/** minimal view of the course the camera needs (oval following) */
+export interface CameraCourse {
+  toWorld(x: number, s: number, out: number[] | Float32Array): void;
+  infieldCenter(out: number[] | Float32Array): void;
 }
 
 export type CameraMode = 'title' | 'intro' | 'chase' | 'finish';
@@ -34,6 +43,10 @@ export class CameraRig {
   private shakeAmp = 0;
   private shakeT = 0;
   reduceMotion = false;
+  course: CameraCourse | null = null;
+  private readonly tmpA = [0, 0, 0];
+  private readonly tmpB = [0, 0, 0];
+  private readonly centre = [0, 0];
 
   // high enough to read the gaps between the horses ahead (occluders on the
   // camera->player line are hidden by the renderer)
@@ -83,17 +96,16 @@ export class CameraRig {
     let lz: number;
     let rate = 10;
 
-    if (this.mode === 'title') {
-      const a = this.modeTime * 0.05;
-      const ahead = 70;
-      const cx = t.x + sh * ahead;
-      const cz = t.z + ch * ahead;
-      const R = 120;
-      tx = cx + Math.cos(a) * R * rx + Math.sin(a) * R * -sh;
-      tz = cz + Math.cos(a) * R * rz + Math.sin(a) * R * -ch;
-      ty = 42;
-      lx = cx + sh * 30;
-      lz = cz + ch * 30;
+    if (this.mode === 'title' && this.course) {
+      // high slow orbit over the infield: the whole oval and the 10,000-strong band
+      this.course.infieldCenter(this.centre);
+      const a = this.modeTime * 0.04 + 2.2;
+      const R = 620;
+      tx = this.centre[0] + Math.cos(a) * R;
+      tz = this.centre[1] + Math.sin(a) * R;
+      ty = 210;
+      lx = (t.x + this.centre[0]) * 0.5;
+      lz = (t.z + this.centre[1]) * 0.5;
       ly = 0;
       rate = 2;
     } else if (this.mode === 'finish') {
@@ -110,24 +122,41 @@ export class CameraRig {
       this.pull += (airborne - this.pull) * k(airborne > this.pull ? 6 : 2.5);
       const dist = this.distance + this.pull * 2.5 + Math.max(0, t.speed - 18) * 0.25;
       const height = this.height + this.pull * 1.6;
-      let cd = dist;
-      let chh = height + t.y * 0.35;
-      let la = this.lookAhead;
-      if (this.mode === 'intro') {
-        // ultra-wide establishing shot of all 10,000 easing into the chase camera
-        const u = Math.min(1, this.modeTime / (this.introLength * 0.85));
-        const e = 1 - Math.pow(1 - u, 3);
-        cd = 60 + (dist - 60) * e;
-        chh = 70 + (chh - 70) * e;
-        la = 120 + (this.lookAhead - 120) * e;
-        rate = 20;
+      // follow the course: camera on the centreline-parallel curve behind the player,
+      // looking at a point ahead on the course (so it sees round the turn)
+      if (this.course) {
+        this.course.toWorld(t.cx * 0.9, t.cs - dist, this.tmpA);
+        this.course.toWorld(t.cx * 0.8, t.cs + this.lookAhead, this.tmpB);
+        tx = this.tmpA[0];
+        tz = this.tmpA[1];
+        lx = this.tmpB[0];
+        lz = this.tmpB[1];
+      } else {
+        tx = t.x - sh * dist;
+        tz = t.z - ch * dist;
+        lx = t.x + sh * this.lookAhead;
+        lz = t.z + ch * this.lookAhead;
       }
-      tx = t.x - sh * cd;
-      tz = t.z - ch * cd;
-      ty = chh;
-      lx = t.x + sh * la;
-      lz = t.z + ch * la;
+      ty = height + t.y * 0.35;
       ly = 1.2 + t.y * 0.3;
+      if (this.mode === 'intro' && this.course) {
+        // establishing shot from above the infield (the oval and the whole field) easing
+        // down into the chase camera over the start sequence
+        const u = Math.min(1, this.modeTime / (this.introLength * 0.85));
+        const e = u * u * (3 - 2 * u);
+        this.course.infieldCenter(this.centre);
+        this.course.toWorld(0, t.cs + 120, this.tmpB);
+        const sx = this.centre[0] * 0.55 + this.tmpB[0] * 0.45;
+        const sz = this.centre[1] * 0.55 + this.tmpB[1] * 0.45;
+        tx = sx + (tx - sx) * e;
+        tz = sz + (tz - sz) * e;
+        ty = 230 + (ty - 230) * e;
+        this.course.toWorld(0, t.cs + 140, this.tmpB);
+        lx = this.tmpB[0] + (lx - this.tmpB[0]) * e;
+        lz = this.tmpB[1] + (lz - this.tmpB[1]) * e;
+        ly = ly * e;
+        rate = 30;
+      }
     }
 
     if (!this.initialised) {

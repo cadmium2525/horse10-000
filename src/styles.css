@@ -291,6 +291,10 @@ body {
   left: calc(14px + var(--safe-l));
   top: calc(10px + var(--safe-t));
   font-size: 18px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
 }
 .rank-num {
   transform-origin: left center;
@@ -305,7 +309,7 @@ body {
 }
 @keyframes bump {
   0% {
-    transform: scale(1.18);
+    transform: scale(1.08);
   }
   100% {
     transform: scale(1);
@@ -317,7 +321,6 @@ body {
 }
 .rank-total {
   font-size: clamp(14px, 2.4vw, 20px);
-  margin-left: 4px;
 }
 .hud-right {
   position: absolute;
@@ -720,6 +723,12 @@ body:not(.touch) .btn-fullscreen {
 
 /* portrait (playable, but landscape is recommended) */
 @media (orientation: portrait) {
+  .hud-right,
+  .hud-rank {
+    background: rgba(29, 36, 51, 0.35);
+    border-radius: 10px;
+    padding: 2px 8px;
+  }
   .hud-bar {
     top: calc(78px + var(--safe-t));
     width: 70vw;
@@ -733,4 +742,29 @@ body:not(.touch) .btn-fullscreen {
   .btn-fullscreen {
     display: none;
   }
+}
+
+.hud-dash.winded .dash-fill {
+  background: #9aa3b5;
+}
+.hud-dash.winded .dash-label::after {
+  content: ' 息切れ';
+}
+.hud-dash.blocked .dash-label::after {
+  content: ' 前が詰まってる！';
+}
+.hud-toast {
+  position: absolute;
+  left: 50%;
+  top: 32%;
+  transform: translateX(-50%);
+  font-size: clamp(20px, 3.6vw, 32px);
+  white-space: nowrap;
+  color: #fff;
+}
+.hud-toast.good {
+  color: #7dffb2;
+}
+.hud-toast.bad {
+  color: #ffb0b0;
 }

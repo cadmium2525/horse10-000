@@ -15,9 +15,19 @@ export const SIM = {
   MAX_STEPS_PER_FRAME: 4,
 } as const;
 
+/**
+ * Oval: two straights + two semicircles (left-handed). The race starts on the back
+ * straight, runs turn 3-4 and finishes on the home straight (< 1 lap).
+ * With |x| ≤ 75 and R = 360 the inside/outside distance factor stays within 0.79–1.21.
+ */
 export const COURSE = {
-  LENGTH: 1300,
-  WIDTH: 260,
+  WIDTH: 150,
+  TURN_RADIUS: 360,
+  STRAIGHT: 460,
+  /** start line (front of the grid) to the first turn */
+  START_TO_TURN: 120,
+  /** turn exit to the finish line on the home straight */
+  HOME_TO_FINISH: 230,
 } as const;
 
 export const FIELD = {
@@ -30,7 +40,7 @@ export const FIELD = {
    */
   GRID_LATERAL_SPACING: 1.8,
   GRID_ROW_SPACING: 2.0,
-  GRID_HALF_WIDTH: 120,
+  GRID_HALF_WIDTH: 70,
   GRID_JITTER: 0,
   GRID_PROGRESS_JITTER: 0.15,
   /**
@@ -38,10 +48,12 @@ export const FIELD = {
    * CORRIDOR_HALF m half-width, centred CORRIDOR_OFFSET m off the centre line so the player
    * does not start in one). NPC lane changes avoid them; a skilled player rides them.
    */
-  CORRIDOR_SPACING: 18,
+  CORRIDOR_SPACING: 25,
   CORRIDOR_HALF: 1.2,
-  CORRIDOR_OFFSET: 9,
+  CORRIDOR_OFFSET: 12.5,
   CORRIDOR_FROM_ROW: 10,
+  /** lateral speed (m/s) at which upright NPCs leave a corridor */
+  CORRIDOR_EXIT_SPEED: 1.2,
   /** player starts this far behind the last row */
   PLAYER_BEHIND_LAST_ROW: 3.5,
   /** seconds before the gates open */
@@ -62,8 +74,8 @@ export const HORSE = {
   /** tallest pile (m): 3 layers. Player jump peak is 1.6 m => 0–1 layers are jumpable */
   PILE_MAX: 1.8,
 
-  NPC_SPEED_MIN: 14.0,
-  NPC_SPEED_MAX: 16.0,
+  NPC_SPEED_MIN: 12.7,
+  NPC_SPEED_MAX: 14.7,
   /** share of base speed decided by start row: front rows are faster, so the field fans
    *  out instead of locking into a solid block, and difficulty rises towards the front */
   FRONT_BIAS: 0.75,
@@ -87,27 +99,45 @@ export const HORSE = {
   /** immunity after standing up (prevents permanent fall loops) */
   GRACE_TIME: 1.2,
 
+  /** metres past the line at full pace before easing to the run-out speed */
+  FINISH_RUNOUT: 180,
   /** run-out speed after finishing */
   FINISH_SPEED: 9,
 } as const;
 
 export const PLAYER = {
-  CRUISE_SPEED: 19.8,
-  DASH_SPEED: 24,
+  CRUISE_SPEED: 21.5,
+  DASH_SPEED: 25,
   ACCEL: 6,
   LATERAL_MAX: 7.5,
   LATERAL_ACCEL: 30,
   JUMP_VY: 8,
   JUMP_COOLDOWN: 0.35,
   DASH_DRAIN: 0.5, // gauge / s (full gauge = 2 s)
-  DASH_REGEN: 0.2,
-  DASH_MIN_TO_START: 0.2,
+  /** slow natural refill: jumps, near misses and passes are the real fuel (review M4) */
+  DASH_REGEN: 0.08,
+  DASH_MIN_TO_START: 0.25,
+  /** running the gauge dry: winded for this long at cruise × factor */
+  WINDED_TIME: 1.0,
+  WINDED_FACTOR: 0.85,
+  /** an upright horse this close ahead in the lane cancels the dash bonus (gauge still drains) */
+  DASH_CLEAR_AHEAD: 6,
+  /** accident multipliers while dashing (contact stumbles/trips, landing on a downed horse) */
+  DASH_RISK: 1.9,
+  DASH_LANDING_RISK: 1.3,
+  /** gauge refills */
+  JUMP_CLEAR_GAUGE: 0.35,
+  NEAR_MISS_GAUGE: 0.05,
+  PASS_GAUGE: 0.0012,
+  /** clearing a downed horse / low pile gives a short burst */
+  JUMP_BOOST: 4.5,
+  JUMP_BOOST_TIME: 1.3,
   /** share of the closing speed the player loses when hitting an NPC from behind */
   SHOULDER_LOSS: 0.55,
   /** lateral shove (m/s) given to an NPC the player runs into */
-  SHOULDER_SHOVE: 1.2,
+  SHOULDER_SHOVE: 0.6,
   /** probability multiplier on accidental stumbles (player-friendly) */
-  STUMBLE_MULT: 0.6,
+  STUMBLE_MULT: 0.95,
 } as const;
 
 /**
@@ -129,8 +159,8 @@ export interface SimTuning {
 export const DEFAULT_TUNING: Readonly<SimTuning> = {
   accidentRate: 1,
   avoidSkill: 1,
-  chainDecay: 0.65,
-  startGrace: 6,
+  chainDecay: 0.75,
+  startGrace: 3,
 };
 
 export const COLLISION = {
@@ -148,20 +178,23 @@ export const COLLISION = {
   TRIP_BASE: 0.6,
   TRIP_PER_IMPACT: 0.04,
   /** layer B horses are less likely to trip (they are simulated more coarsely) */
-  TRIP_MULT_B: 0.45,
+  TRIP_MULT_B: 0.6,
   /**
    * spontaneous misstep hazard for A/B NPCs (per second, × (density/ref)² × accident scale):
    * footing / clipping heels. A share of them go straight down => seeds local chains.
    */
   MISSTEP_HAZARD: 0.003,
   MISSTEP_FALL_SHARE: 0.35,
-  /** no spontaneous accidents inside this box in front of the player (fairness, design §4) */
-  SAFE_AHEAD: 15,
+  /**
+   * fairness window (design §4): no NEW spontaneous/scripted accident starts within
+   * max(SAFE_AHEAD_MIN, speed × SAFE_SECONDS) in front of the player (±SAFE_SIDE).
+   * Existing piles and chain reactions are NOT suppressed.
+   */
+  SAFE_SECONDS: 1.0,
+  SAFE_AHEAD_MIN: 15,
   SAFE_SIDE: 3,
-  /** chain trips inside that box are this much less likely (no sudden unavoidable pile) */
-  SAFE_TRIP_MULT: 0.35,
   /** per-second chance (× skill) that an NPC right in front of a faster player moves aside */
-  YIELD_RATE: 1.0,
+  YIELD_RATE: 0.25,
   /** landing a jump onto a downed horse */
   LANDING_FAIL: 0.85,
   LANDING_FAIL_NPC: 0.45,
@@ -207,7 +240,7 @@ export const LOD = {
   /** ... and at most this much when already overlapping it (overlaps resolve sideways) */
   FOLLOW_OVERLAP_BRAKE: 0.5,
   /** near-field NPCs arriving at a downed horse hop over it with chance skill × this */
-  NPC_HOP_CHANCE: 0.8,
+  NPC_HOP_CHANCE: 0.4,
   NPC_HOP_VY: 7.5,
   /** horses deeper than 2nd in a queue behind a downed horse keep at least this × target speed */
   QUEUE_MIN_SPEED: 0.5,
@@ -220,7 +253,33 @@ export const LOD = {
   FOLLOW_DIST: 10,
   /** group fall hazard per C decision, scaled by (density / DENSITY_REF)² */
   C_FALL_HAZARD: 0.000008,
+  /** per far-field decision on/near a turn: chance to move one lane towards the inside */
+  INWARD_DRIFT: 0.02,
+  /** the leading LEAD_PACK horses get an extra accident hazard (per second) */
+  LEAD_PACK: 300,
+  LEAD_HAZARD: 0.0015,
   C_FALL_CLUSTER_RADIUS: 4,
+} as const;
+
+/**
+ * Scripted accidents (Phase 1 review M3: falls must be visible all race long). Seeded
+ * times; each seeds a big fall in the densest spot AHEAD_MIN–AHEAD_MAX m ahead of the
+ * player (never inside the fairness window), then local chain rules take over.
+ */
+export const DIRECTOR = {
+  FIRST_MIN: 7.5,
+  FIRST_MAX: 10,
+  GAP_MIN: 9,
+  GAP_MAX: 13,
+  AHEAD_MIN: 32,
+  AHEAD_MAX: 65,
+  /** scripted piles stay down longer so the player actually reaches them (jump or go round) */
+  DOWN_SCALE: 2.4,
+  SIDE: 22,
+  RADIUS: 6,
+  CHANCE: 0.55,
+  /** share of events placed across the player's own line */
+  IN_LINE: 0.6,
 } as const;
 
 export const RACE = {

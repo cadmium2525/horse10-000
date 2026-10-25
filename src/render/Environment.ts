@@ -31,6 +31,7 @@ export class Environment {
     for (const m of this.buildRails()) this.group.add(m);
     for (const m of this.buildTrees()) this.group.add(m);
     this.group.add(this.buildHills());
+    this.group.add(this.buildInfieldAndStands());
     this.group.add(this.buildClouds());
     this.group.add(this.buildFinishArch());
     for (const m of this.buildDistanceBoards()) this.group.add(m);
@@ -76,8 +77,8 @@ void main(){
 
   private buildGround(): THREE.Mesh {
     const c = this.course;
-    const mid = [0, 0, 0];
-    c.toWorld(0, (c.sMin + c.sMax) / 2, mid);
+    const mid = [0, 0];
+    c.infieldCenter(mid);
     const geo = new THREE.PlaneGeometry(9000, 9000, 1, 1);
     geo.rotateX(-Math.PI / 2);
     const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x86c25a }));
@@ -241,33 +242,103 @@ void main(){
     return [trunks, crowns];
   }
 
+  /** low-poly hills in a ring well outside the oval */
   private buildHills(): THREE.Mesh {
     const c = this.course;
     const rng = this.rng;
     const parts: THREE.BufferGeometry[] = [];
-    const p = [0, 0, 0];
-    for (let s = c.sMin - 600; s < c.sMax + 900; s += 140) {
-      for (const side of [-1, 1]) {
-        const r = rng.range(120, 260);
-        const g = new THREE.IcosahedronGeometry(r, 1);
-        g.scale(1.6, rng.range(0.35, 0.6), 1);
-        c.toWorld(side * rng.range(650, 1100), s + rng.range(-60, 60), p);
-        g.translate(p[0], -r * 0.1, p[1]);
-        parts.push(g);
-      }
-    }
-    // a big backdrop hill range beyond the finish
-    for (let k = -6; k <= 6; k++) {
-      const r = rng.range(200, 320);
+    const centre = [0, 0];
+    c.infieldCenter(centre);
+    for (let k = 0; k < 40; k++) {
+      const a = (k / 40) * Math.PI * 2 + rng.range(-0.05, 0.05);
+      const dist = rng.range(1150, 1600);
+      const r = rng.range(140, 300);
       const g = new THREE.IcosahedronGeometry(r, 1);
-      g.scale(1.8, rng.range(0.4, 0.75), 1);
-      c.toWorld(k * 260, c.sMax + rng.range(1200, 1500), p);
-      g.translate(p[0], -r * 0.1, p[1]);
+      g.scale(1.7, rng.range(0.35, 0.7), 1);
+      g.rotateY(-a);
+      g.translate(centre[0] + Math.cos(a) * dist, -r * 0.1, centre[1] + Math.sin(a) * dist);
       parts.push(g);
     }
     const geo = mergeGeometries(parts)!;
     geo.computeVertexNormals();
     return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x77b26a, flatShading: true }));
+  }
+
+  /**
+   * Toy-style infield landmarks: a pond with a little island, flower beds and a big screen
+   * facing the home straight; a grandstand with a coloured crowd outside the home straight.
+   */
+  private buildInfieldAndStands(): THREE.Group {
+    const c = this.course;
+    const g = new THREE.Group();
+    const centre = [0, 0];
+    c.infieldCenter(centre);
+    const rng = this.rng;
+    // pond (flat ellipse) + island
+    const pond = new THREE.Mesh(new THREE.CircleGeometry(1, 40), new THREE.MeshLambertMaterial({ color: 0x5ab4e8 }));
+    pond.rotation.x = -Math.PI / 2;
+    pond.scale.set(150, 90, 1);
+    pond.position.set(centre[0], 0.03, centre[1]);
+    const island = new THREE.Mesh(new THREE.CylinderGeometry(22, 26, 3, 14), new THREE.MeshLambertMaterial({ color: 0x8fd16a }));
+    island.position.set(centre[0] + 30, 0.5, centre[1]);
+    g.add(pond, island);
+    // flower beds (instanced, bright)
+    const bed = new THREE.CylinderGeometry(6, 6, 0.6, 10);
+    const flowers = new THREE.InstancedMesh(bed, new THREE.MeshLambertMaterial({ color: 0xffffff }), 36);
+    const cols = [0xff5d8f, 0xffd60a, 0xff8a00, 0xb15dff, 0xffffff].map((h) => new THREE.Color(h));
+    const m = new THREE.Matrix4();
+    for (let k = 0; k < 36; k++) {
+      const a = (k / 36) * Math.PI * 2;
+      m.makeTranslation(centre[0] + Math.cos(a) * 200, 0.3, centre[1] + Math.sin(a) * 130);
+      flowers.setMatrixAt(k, m);
+      flowers.setColorAt(k, cols[k % cols.length]);
+    }
+    g.add(flowers);
+
+    // big screen inside the home straight, facing it
+    const p = [0, 0, 0];
+    c.toWorld(-(c.width / 2 + 45), c.homeStart + 180, p);
+    const screenGroup = new THREE.Group();
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(70, 26, 3), new THREE.MeshLambertMaterial({ color: 0x23293a }));
+    frame.position.y = 22;
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(64, 21), new THREE.MeshBasicMaterial({ color: 0x3a86ff }));
+    face.position.set(0, 22, 1.6);
+    const legs = new THREE.Mesh(new THREE.BoxGeometry(6, 10, 3), new THREE.MeshLambertMaterial({ color: 0x9aa3b5 }));
+    legs.position.y = 5;
+    screenGroup.add(frame, face, legs);
+    screenGroup.position.set(p[0], 0, p[1]);
+    // face the track (towards +x in course space = outward on the home straight)
+    screenGroup.rotation.y = p[2] - Math.PI / 2;
+    g.add(screenGroup);
+
+    // grandstand outside the home straight with a dotted crowd
+    const standLen = 380;
+    const steps = 6;
+    const standGeo: THREE.BufferGeometry[] = [];
+    for (let k = 0; k < steps; k++) {
+      const box = new THREE.BoxGeometry(standLen, 2.2, 6);
+      box.translate(0, 1.1 + k * 2.2, k * 6);
+      standGeo.push(box);
+    }
+    const stand = new THREE.Mesh(mergeGeometries(standGeo)!, new THREE.MeshLambertMaterial({ color: 0xe9edf5 }));
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(standLen + 20, 1.2, 46), new THREE.MeshLambertMaterial({ color: 0xff3b5c }));
+    roof.position.set(0, steps * 2.2 + 9, 16);
+    const crowdN = 900;
+    const fan = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1.4, 1), new THREE.MeshLambertMaterial({ color: 0xffffff }), crowdN);
+    for (let k = 0; k < crowdN; k++) {
+      const row = rng.int(0, steps - 1);
+      m.makeTranslation(rng.range(-standLen / 2 + 3, standLen / 2 - 3), 2.2 + row * 2.2 + 0.7, row * 6 + rng.range(-1.5, 1.5));
+      fan.setMatrixAt(k, m);
+      fan.setColorAt(k, cols[rng.int(0, cols.length - 1)]);
+    }
+    const standGroup = new THREE.Group();
+    standGroup.add(stand, roof, fan);
+    c.toWorld(c.width / 2 + 28, c.homeStart + 260, p);
+    standGroup.position.set(p[0], 0, p[1]);
+    // local +z points away from the track (outside), local x along the straight
+    standGroup.rotation.y = p[2] - Math.PI / 2;
+    g.add(standGroup);
+    return g;
   }
 
   private buildClouds(): THREE.Mesh {

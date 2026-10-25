@@ -6,7 +6,8 @@ import { FIELD } from '../src/game/Config';
 /**
  * Reachability (design §2/§9): winning must be possible but not trivial.
  *  - the leading NPC finishes in 60–90 s
- *  - an ideal player run (no contacts, dash whenever available) beats the leader by ≥ 8 s
+ *  - an ideal player run (no contacts, inside line, dash whenever available) beats the
+ *    leader by 3–6 s: winning needs near-perfect play (Phase 1 playtest: too easy)
  */
 function leaderFinish(seed: number): { leader: number; playerStart: number } {
   const sim = new HorseSimulation(new Course(seed), seed);
@@ -24,8 +25,16 @@ function idealPlayerFinish(seed: number, startProgress: number): number {
   const sim = new HorseSimulation(new Course(seed), seed, 1);
   sim.progress[0] = startProgress;
   sim.prevProgress[0] = startProgress;
-  for (let t = 0; t < 30 * 120; t++) {
-    sim.step({ steer: 0, jump: false, dash: true });
+  // ideal line: hug the inside rail (shortest way round the turn), re-press dash whenever
+  // the gauge allows (dash needs a fresh press after running dry)
+  const inside = -(sim.course.width / 2 - 2);
+  let held = false;
+  for (let t = 0; t < 30 * 140; t++) {
+    const steer = Math.max(-1, Math.min(1, (inside - sim.x[0]) * 0.5));
+    // keep holding while dashing; otherwise release for a tick, then press again when ready
+    const dash: boolean = sim.dashing ? true : !held && sim.dashGauge >= 0.3;
+    held = dash;
+    sim.step({ steer, jump: false, dash });
     if (sim.finishTime[0] >= 0) return sim.finishTime[0];
   }
   return Infinity;
@@ -33,7 +42,7 @@ function idealPlayerFinish(seed: number, startProgress: number): number {
 
 describe('balance / reachability', () => {
   for (const seed of [1234, 42]) {
-    it(`seed ${seed}: leader 60–90 s, ideal player ≥ 8 s faster`, () => {
+    it(`seed ${seed}: leader 60–90 s, ideal player 3–6 s faster`, () => {
       const full = new HorseSimulation(new Course(seed), seed);
       const start = full.progress[FIELD.PLAYER];
       const { leader } = leaderFinish(seed);
@@ -43,7 +52,9 @@ describe('balance / reachability', () => {
       );
       expect(leader).toBeGreaterThanOrEqual(60);
       expect(leader).toBeLessThanOrEqual(90);
-      expect(leader - ideal).toBeGreaterThanOrEqual(8);
+      // tight: perfect play beats the leader, but only by a few seconds (M1)
+      expect(leader - ideal).toBeGreaterThanOrEqual(3);
+      expect(leader - ideal).toBeLessThanOrEqual(6);
     }, 60000);
   }
 });

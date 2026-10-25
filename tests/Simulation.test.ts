@@ -147,3 +147,23 @@ describe('jump timing', () => {
     expect(trips).toBeGreaterThan(5);
   });
 });
+
+describe('oval distance', () => {
+  it('on a turn the inside lane gains centreline progress faster than the outside', () => {
+    const c = new Course(1);
+    const sim = new HorseSimulation(c, 1, 3);
+    while (sim.raceTime < 2) sim.step();
+    for (const [i, x] of [
+      [1, -60],
+      [2, 60],
+    ] as const) {
+      sim.x[i] = x;
+      sim.laneTarget[i] = x;
+      sim.progress[i] = c.turnA + 100;
+      sim.baseSpeed[i] = 15;
+      sim.speed[i] = 15;
+    }
+    for (let t = 0; t < 60; t++) sim.step();
+    expect(sim.progress[1] - sim.progress[2]).toBeGreaterThan(5);
+  });
+});

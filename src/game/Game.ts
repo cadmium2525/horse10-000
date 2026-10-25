@@ -77,6 +77,7 @@ export class Game {
   leaderProgress = 0;
   result: RaceResult | null = null;
   private finishTimer = 0;
+  private resultShownAt = 0;
   /** player's progress at the gate (progress bar origin) */
   private raceStartProgress = 0;
   private last = -1;
@@ -88,6 +89,9 @@ export class Game {
   private prevPlayerFalls = 0;
   private prevFallsTotal = 0;
   private prevDashing = false;
+  private prevJumpsCleared = 0;
+  private prevNearMisses = 0;
+  private prevWinded = false;
 
   // timing statistics (exponentially smoothed)
   readonly timing = { simMsPerTick: 0, ticksPerFrame: 1, fps: 0, frameMs: 16, prepMs: 0, drawMs: 0, cpuMs: 0 };
@@ -164,7 +168,6 @@ export class Game {
     this.sim = new HorseSimulation(this.course, this.seed);
     this.world.setRace(this.sim, this.course);
     this.controller = new PlayerController(this.input, true, 0.6);
-    for (let k = 0; k < 30 * 5; k++) this.sim.step(this.controller.sample(this.sim));
     this.stepper.reset();
     this.world.rig.setMode('title');
     this.title.update(this.settings, loadBest());
@@ -196,6 +199,9 @@ export class Game {
     this.prevPlayerFalls = 0;
     this.prevFallsTotal = 0;
     this.prevDashing = false;
+    this.prevJumpsCleared = 0;
+    this.prevNearMisses = 0;
+    this.prevWinded = false;
     this.stepper.reset();
     this.world.rig.setMode('intro', FIELD.START_DELAY);
     this.title.show(false);
@@ -256,6 +262,8 @@ export class Game {
     if (!this.result) return;
     const newBest = submitResult(this.result);
     this.phase = 'result';
+    this.resultShownAt = performance.now();
+    this.input.confirmRequested = false;
     this.hud.show(false);
     this.resultScreen.show(this.result, loadBest(), newBest);
   }
@@ -394,7 +402,7 @@ export class Game {
     if (inp.confirmRequested) {
       inp.confirmRequested = false;
       if (this.phase === 'title') this.startRace(this.seed);
-      else if (this.phase === 'result') this.startRace(this.seed);
+      else if (this.phase === 'result' && performance.now() - this.resultShownAt > 900) this.startRace(this.seed);
     }
   }
 
@@ -420,8 +428,10 @@ export class Game {
     if (sim.tick % RACE.RANK_PERIOD === 0) {
       this.rank = computeRank(sim, p);
       this.leaderProgress = sim.progress[sim.order[0]];
-      const d = this.stats.update(sim, sim.time, sim.fallCount[p]);
-      if (d > 0 && this.phase === 'racing') this.sound.pass(this.stats.burst);
+      const seq = this.stats.burstSeq;
+      this.stats.update(sim, sim.time, sim.fallCount[p]);
+      // one chime per completed burst of passes (pitch grows with its size)
+      if (this.stats.burstSeq !== seq && this.phase === 'racing' && this.stats.lastBurst >= 5) this.sound.pass(this.stats.lastBurst);
     }
 
     // ---- sound / camera events ----
@@ -439,6 +449,17 @@ export class Game {
     }
     if (sim.dashing && !this.prevDashing) this.sound.dash();
     this.prevDashing = sim.dashing;
+    if (sim.jumpsCleared > this.prevJumpsCleared) {
+      this.prevJumpsCleared = sim.jumpsCleared;
+      this.hud.toast('ナイスジャンプ！ ダッシュ回復＋加速', 'good');
+      this.sound.pass(400);
+    } else if (sim.nearMisses > this.prevNearMisses + 2) {
+      this.prevNearMisses = sim.nearMisses;
+      this.hud.toast('すり抜け！', 'good');
+    }
+    const winded = sim.winded > 0;
+    if (winded && !this.prevWinded) this.hud.toast('息切れ… ダッシュは使い切らないで', 'bad');
+    this.prevWinded = winded;
     if (sim.fallsTotal > this.prevFallsTotal) {
       this.prevFallsTotal = sim.fallsTotal;
       // boing for fresh tumbles near the player
@@ -470,7 +491,7 @@ export class Game {
         rank: this.rank,
         field: sim.n,
         remaining: L - sim.progress[p],
-        raceTime: sim.raceTime,
+        raceTime: sim.finished[p] ? sim.finishTime[p] : sim.raceTime,
         progress: (sim.progress[p] - this.startProgress()) / total,
         leaderProgress: (this.leaderProgress - this.startProgress()) / total,
         dash: sim.dashGauge,
@@ -480,6 +501,8 @@ export class Game {
         burstSeq: this.stats.burstSeq,
         finalStretch: this.phase === 'racing' && L - sim.progress[p] < FINAL_STRETCH_M,
         racing: this.phase === 'racing',
+        winded: sim.winded > 0,
+        dashBlocked: sim.dashBlocked,
       },
       this.paused ? 0 : dt,
     );

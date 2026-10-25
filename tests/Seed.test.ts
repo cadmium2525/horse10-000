@@ -53,11 +53,10 @@ describe('seed helpers', () => {
   });
 });
 
-describe('Course', () => {
-  it('generates the same course for the same seed', () => {
+describe('Course (oval)', () => {
+  it('is the same for the same seed', () => {
     const a = new Course(42);
     const b = new Course(42);
-    expect(a.bends).toEqual(b.bends);
     const pa = [0, 0, 0];
     const pb = [0, 0, 0];
     a.toWorld(10, 800, pa);
@@ -65,12 +64,23 @@ describe('Course', () => {
     expect(pa).toEqual(pb);
   });
 
-  it('keeps bends gentle and the finish straight', () => {
-    for (let s = 1; s < 50; s++) {
-      const c = new Course(s * 7919);
-      for (const b of c.bends) expect(Math.abs(b.angle)).toBeLessThan(0.5);
-      expect(c.headingAt(c.length - 1)).toBeCloseTo(c.headingAt(c.length - 250), 6);
-    }
+  it('is a closed loop with bounded curvature, finishing on the home straight', () => {
+    const c = new Course(1);
+    const p0 = [0, 0, 0];
+    const p1 = [0, 0, 0];
+    c.toWorld(0, c.sMin, p0);
+    c.toWorld(0, c.sMax, p1);
+    expect(Math.hypot(p0[0] - p1[0], p0[1] - p1[1])).toBeLessThan(3);
+    for (let s = c.sMin; s < c.sMax; s += 5) expect(c.curvatureAt(s)).toBeLessThanOrEqual(1 / 350 + 1e-9);
+    // race is less than one lap, finish line on the home straight (curvature 0, heading π)
+    expect(c.length - c.sMin).toBeLessThan(c.lap);
+    expect(c.curvatureAt(c.length)).toBe(0);
+    expect(c.headingAt(c.length)).toBeCloseTo(Math.PI, 6);
+    // the whole grid fits on the back straight
+    expect(c.sMin).toBeLessThanOrEqual(-290);
+    // inside/outside distance factor stays sane
+    const k = 1 / c.radius;
+    expect(1 - k * (c.width / 2)).toBeGreaterThan(0.75);
   });
 
   it('places s=0 at the world origin', () => {
@@ -79,5 +89,16 @@ describe('Course', () => {
     c.toWorld(0, 0, out);
     expect(Math.abs(out[0])).toBeLessThan(1e-6);
     expect(Math.abs(out[1])).toBeLessThan(1e-6);
+  });
+
+  it('turns are left-handed: the infield is on the −x side', () => {
+    const c = new Course(5);
+    const centre = [0, 0];
+    c.infieldCenter(centre);
+    const inner = [0, 0, 0];
+    const outer = [0, 0, 0];
+    c.toWorld(-50, 600, inner);
+    c.toWorld(50, 600, outer);
+    expect(Math.hypot(inner[0] - centre[0], inner[1] - centre[1])).toBeLessThan(Math.hypot(outer[0] - centre[0], outer[1] - centre[1]));
   });
 });

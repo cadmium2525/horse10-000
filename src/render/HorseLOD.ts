@@ -146,7 +146,7 @@ export class HorseRenderer {
   effectiveMid = 0;
   effectiveFar = 0;
   /** interpolated world pose of the player (for camera follow) */
-  readonly playerPose = { x: 0, y: 0, z: 0, heading: 0, yaw: 0, speed: 0 };
+  readonly playerPose = { x: 0, y: 0, z: 0, heading: 0, yaw: 0, speed: 0, cx: 0, cs: 0 };
 
   constructor(
     private sim: HorseSimulation,
@@ -266,6 +266,8 @@ export class HorseRenderer {
     pp.heading = this.tmp[2];
     pp.yaw = this.tmp[2] - Math.max(-0.45, Math.min(0.45, sim.vx[i] / Math.max(sim.speed[i], 10)));
     pp.speed = sim.speed[i];
+    pp.cx = x;
+    pp.cs = p;
   }
 
   /** Fill instance buffers for all visible horses. `camera` must already be positioned. */

@@ -61,6 +61,7 @@ export class World {
     this.scene.add(this.marker);
 
     this.rig = new CameraRig(1);
+    this.rig.course = course;
     this.resize();
   }
 
@@ -76,6 +77,7 @@ export class World {
         this.env = new Environment(course);
         this.scene.add(this.env.group);
         this.course = course;
+        this.rig.course = course;
       }
       this.scene.remove(this.horses.group);
       this.horses.dispose();

@@ -132,8 +132,8 @@ describe('R1: no standing traffic jams behind downed horses', () => {
     let peak = 0;
     for (let t = 0; t < 30 * 80; t++) {
       sim.step(withBot ? bot.decide(sim) : undefined);
-      // gate start: the rear of a 75-row field is still pulling away (start wave), not a jam
-      if (sim.raceTime < 10) continue;
+      // the first 2 s after the gates open everybody is still accelerating from a standstill
+      if (sim.raceTime < 2) continue;
       let now = 0;
       for (let i = 1; i < sim.n; i++) {
         const st = sim.state[i];

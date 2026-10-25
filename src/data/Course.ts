@@ -1,16 +1,22 @@
 import { COURSE } from '../game/Config';
-import { Rng, deriveSeed } from './Seed';
 
 /**
- * Course model.
+ * Oval course (design change after Phase 1 playtest: "普通の競馬のように楕円型のコース").
  *
  * Simulation works purely in "course space": `x` = lateral offset from the
- * centerline (m, + = right when facing forward), `s`/`progress` = distance
- * along the centerline (m). The finish line is at s = length; the front row of
- * the starting grid is at s = 0 and the pack extends behind it (negative s).
+ * centerline (m, + = right when facing forward = OUTSIDE of the oval, all turns are
+ * left-handed), `s`/`progress` = distance along the centerline (m).
  *
- * The world-space centerline (gentle curves) only matters to rendering, so it
- * is precomputed as a lookup table here and never consulted by the sim.
+ * Layout along s (one lap = 2 straights + 2 semicircles, centerline radius R):
+ *   back straight  [sMin, turnA)     the starting grid fills it behind s = 0
+ *   turn 3-4       [turnA, homeStart) heading +π
+ *   home straight  [homeStart, turnB) finish line at s = length
+ *   turn 1-2       [turnB, sMax)      only the run-out / scenery (race < 1 lap)
+ *
+ * On a turn a horse at lateral offset x travels (1 + κ·x) world metres per centreline
+ * metre (κ = 1/R): the inside rail is shorter but crowded, the outside is clear but long.
+ * The sim advances progress by speed / (1 + κ·x); rank logic is unchanged because progress
+ * is still "centreline distance".
  */
 export interface CourseSpec {
   seed: number;
@@ -20,24 +26,25 @@ export interface CourseSpec {
   width: number;
   /** first s covered by the centerline table (behind the grid) */
   sMin: number;
-  /** last s covered (run-out past the finish) */
+  /** last s covered (one full lap) */
   sMax: number;
-}
-
-export interface CourseBend {
-  center: number; // s at bend apex
-  span: number; // half-length of the bend (m)
-  angle: number; // total heading change (rad)
+  /** centreline curvature at s (1/m, > 0 on the left-hand turns) */
+  curvatureAt(s: number): number;
 }
 
 export class Course implements CourseSpec {
   readonly seed: number;
   readonly length: number;
   readonly width: number;
+  readonly radius: number;
   readonly sMin: number;
   readonly sMax: number;
+  readonly lap: number;
+  /** s where turn 3-4 starts / the home straight starts / turn 1-2 starts */
+  readonly turnA: number;
+  readonly homeStart: number;
+  readonly turnB: number;
   readonly step = 2; // table resolution (m)
-  readonly bends: CourseBend[];
 
   /** world position of the centerline (x,z) and heading per table entry */
   readonly cx: Float64Array;
@@ -45,15 +52,22 @@ export class Course implements CourseSpec {
   readonly sinH: Float32Array;
   readonly cosH: Float32Array;
   readonly heading: Float32Array;
+  readonly kappa: Float32Array;
   private readonly n: number;
 
-  constructor(seed: number, opts?: Partial<Pick<CourseSpec, 'length' | 'width'>>) {
+  constructor(seed: number, opts?: Partial<{ width: number; radius: number }>) {
     this.seed = seed;
-    this.length = opts?.length ?? COURSE.LENGTH;
     this.width = opts?.width ?? COURSE.WIDTH;
-    this.sMin = -400;
-    this.sMax = this.length + 400;
-    this.bends = generateBends(seed, this.length);
+    this.radius = opts?.radius ?? COURSE.TURN_RADIUS;
+    const R = this.radius;
+    const Ls = COURSE.STRAIGHT;
+    this.turnA = COURSE.START_TO_TURN;
+    this.sMin = this.turnA - Ls;
+    this.homeStart = this.turnA + Math.PI * R;
+    this.length = this.homeStart + COURSE.HOME_TO_FINISH;
+    this.turnB = this.homeStart + Ls;
+    this.lap = 2 * Ls + 2 * Math.PI * R;
+    this.sMax = this.sMin + this.lap;
 
     this.n = Math.ceil((this.sMax - this.sMin) / this.step) + 1;
     this.cx = new Float64Array(this.n);
@@ -61,44 +75,64 @@ export class Course implements CourseSpec {
     this.sinH = new Float32Array(this.n);
     this.cosH = new Float32Array(this.n);
     this.heading = new Float32Array(this.n);
+    this.kappa = new Float32Array(this.n);
 
-    // Integrate heading along s. Start straight; start line at world origin.
+    // Integrate heading along s (midpoint rule). Start line s = 0 sits at world origin.
     let x = 0;
-    let z = this.sMin;
+    let z = 0;
+    const i0 = Math.round(-this.sMin / this.step);
+    const pts: number[] = [];
     for (let i = 0; i < this.n; i++) {
       const s = this.sMin + i * this.step;
       const h = this.headingAt(s);
       this.heading[i] = h;
       this.sinH[i] = Math.sin(h);
       this.cosH[i] = Math.cos(h);
-      this.cx[i] = x;
-      this.cz[i] = z;
-      x += Math.sin(h) * this.step;
-      z += Math.cos(h) * this.step;
+      this.kappa[i] = this.curvatureAt(s);
+      pts.push(x, z);
+      const hm = this.headingAt(s + this.step * 0.5);
+      x += Math.sin(hm) * this.step;
+      z += Math.cos(hm) * this.step;
     }
-    // Re-anchor so that s = 0 sits at world (0, 0).
-    const i0 = Math.round(-this.sMin / this.step);
-    const ox = this.cx[i0];
-    const oz = this.cz[i0];
+    const ox = pts[i0 * 2];
+    const oz = pts[i0 * 2 + 1];
     for (let i = 0; i < this.n; i++) {
-      this.cx[i] -= ox;
-      this.cz[i] -= oz;
+      this.cx[i] = pts[i * 2] - ox;
+      this.cz[i] = pts[i * 2 + 1] - oz;
     }
   }
 
-  /** Analytic heading (rad) at distance s. Smooth (cosine-eased) bends. */
+  /** Analytic heading (rad, 0 = +Z, increasing = turning left). */
   headingAt(s: number): number {
-    let h = 0;
-    for (const b of this.bends) {
-      const t = (s - (b.center - b.span)) / (2 * b.span);
-      if (t <= 0) continue;
-      if (t >= 1) {
-        h += b.angle;
-      } else {
-        h += b.angle * (0.5 - 0.5 * Math.cos(Math.PI * t));
-      }
-    }
-    return h;
+    const R = this.radius;
+    const halfTurn = Math.PI * R;
+    if (s < this.turnA) return 0;
+    if (s < this.homeStart) return (s - this.turnA) / R;
+    if (s < this.turnB) return Math.PI;
+    if (s < this.turnB + halfTurn) return Math.PI + (s - this.turnB) / R;
+    return 2 * Math.PI;
+  }
+
+  curvatureAt(s: number): number {
+    const halfTurn = Math.PI * this.radius;
+    if ((s >= this.turnA && s < this.homeStart) || (s >= this.turnB && s < this.turnB + halfTurn)) return 1 / this.radius;
+    return 0;
+  }
+
+  /** true while s is on one of the turns */
+  onTurn(s: number): boolean {
+    return this.curvatureAt(s) > 0;
+  }
+
+  /** world (x, z) of the oval's centre (middle of the infield) */
+  infieldCenter(out: number[] | Float32Array): void {
+    const a = [0, 0, 0];
+    const b = [0, 0, 0];
+    // centre of curvature of each turn = centreline point R to the inside (−x)
+    this.toWorld(-this.radius, this.turnA, a);
+    this.toWorld(-this.radius, this.turnB, b);
+    out[0] = (a[0] + b[0]) / 2;
+    out[1] = (a[1] + b[1]) / 2;
   }
 
   /**
@@ -122,22 +156,4 @@ export class Course implements CourseSpec {
     out[1] = cz + sh * x + ch * extra;
     out[2] = this.heading[i] + (this.heading[i + 1] - this.heading[i]) * t;
   }
-}
-
-/** Gentle seeded bends: 2–3 bends of at most ~25° total, none near the finish. */
-export function generateBends(seed: number, length: number): CourseBend[] {
-  const rng = new Rng(deriveSeed(seed, 'course-bends'));
-  const count = rng.int(2, 3);
-  const bends: CourseBend[] = [];
-  const usable = length - 300; // last 300 m is straight
-  const slot = usable / count;
-  let dir = rng.sign();
-  for (let i = 0; i < count; i++) {
-    const span = rng.range(110, 180);
-    const center = 150 + slot * i + rng.range(span, Math.max(span + 1, slot - span));
-    const angle = dir * rng.range(0.18, 0.42);
-    bends.push({ center: Math.min(center, usable - span), span, angle });
-    dir = -dir; // S-shape keeps the course roughly straight overall
-  }
-  return bends;
 }

@@ -1,6 +1,6 @@
 import { Rng, deriveSeed } from '../data/Seed';
 import type { CourseSpec } from '../data/Course';
-import { COLLISION, DEFAULT_TUNING, FIELD, HORSE, LOD, PLAYER, SIM, type SimTuning } from './Config';
+import { COLLISION, DEFAULT_TUNING, DIRECTOR, FIELD, HORSE, LOD, PLAYER, SIM, type SimTuning } from './Config';
 import { SpatialHash, resolveCollisions } from './Collision';
 
 /** Horse behaviour states (stored in a Uint8Array). */
@@ -43,6 +43,12 @@ interface GroupEvent {
   x: number;
   p: number;
   r: number;
+  /** scripted (director) events also knock over near-field horses */
+  allLayers?: boolean;
+  /** probability per horse in the radius */
+  chance?: number;
+  /** multiplier on the time spent down */
+  downScale?: number;
 }
 
 /**
@@ -119,6 +125,8 @@ export class HorseSimulation {
   // --- ordering / lanes (layer C car-following) ----------------------------------------
   /** all horses sorted by progress, descending (maintained incrementally) */
   readonly order: Int32Array;
+  /** position of each horse in `order` (0 = leader) */
+  readonly orderPos: Int32Array;
   readonly laneCount: number;
   readonly laneOf: Int16Array;
   readonly laneStart: Int32Array;
@@ -147,12 +155,34 @@ export class HorseSimulation {
   dashGauge = 1;
   dashing = false;
   jumpCooldown = 0;
+  /** dash pressed last tick (a new dash needs a fresh press) */
+  private dashHeldPrev = false;
+  /** seconds of "out of breath" after running the gauge dry (cruise × WINDED_FACTOR) */
+  winded = 0;
+  /** dash requested but blocked by an upright horse right ahead (speed bonus lost, gauge drains) */
+  dashBlocked = false;
+  /** post-jump acceleration boost remaining (s) */
+  boostTime = 0;
+  /** the current jump has passed over a downed horse */
+  private clearedThisJump = false;
+  private wasAirborne = false;
+  /** stats: jumps that cleared a downed horse / pile and landed safely; near misses; passes */
+  jumpsCleared = 0;
+  nearMisses = 0;
+  playerPasses = 0;
+  /** jump presses that actually launched a jump */
+  jumpsTaken = 0;
 
   // --- bookkeeping -----------------------------------------------------------------------
   tick = 0;
   readonly rng: Rng;
   readonly hash: SpatialHash;
   private groupEvents: GroupEvent[] = [];
+  /** scripted accident schedule (race seconds), seeded */
+  readonly directorTimes: number[] = [];
+  private directorNext = 0;
+  /** stats: scripted accidents that fired */
+  directorEvents = 0;
   /** statistics for debug / tests */
   contactsThisTick = 0;
   fallsTotal = 0;
@@ -212,6 +242,7 @@ export class HorseSimulation {
     this.density = new Uint16Array(this.densityCols * this.densityRows);
 
     this.order = new Int32Array(n);
+    this.orderPos = new Int32Array(n);
     this.laneCount = Math.ceil(course.width / LOD.LANE_WIDTH) + 2;
     this.laneOf = new Int16Array(n);
     this.laneStart = new Int32Array(this.laneCount + 1);
@@ -228,6 +259,10 @@ export class HorseSimulation {
 
     this.hash = new SpatialHash(COLLISION.CELL, 4096, n);
     this.setupField();
+    const dr = new Rng(deriveSeed(seed, 'director'));
+    for (let t = dr.range(DIRECTOR.FIRST_MIN, DIRECTOR.FIRST_MAX); t < 200; t += dr.range(DIRECTOR.GAP_MIN, DIRECTOR.GAP_MAX)) {
+      this.directorTimes.push(t);
+    }
     // initial global order (later maintained incrementally by insertion sort)
     const idx = Array.from({ length: n }, (_, i) => i);
     idx.sort((a, b) => this.progress[b] - this.progress[a] || a - b);
@@ -334,6 +369,10 @@ export class HorseSimulation {
     this.buildDensity();
     this.sortOrder();
     this.buildLanes();
+    if (this.directorNext < this.directorTimes.length && this.raceTime >= this.directorTimes[this.directorNext]) {
+      this.directorNext++;
+      if (this.n > 1000) this.directorAccident();
+    }
     this.processGroupEvents();
 
     this.updatePlayer(intent);
@@ -353,6 +392,7 @@ export class HorseSimulation {
     this.planDetours();
     this.integrate();
     resolveCollisions(this);
+    this.playerPassBookkeeping(FIELD.PLAYER);
     this.checkFinish();
   }
 
@@ -513,6 +553,8 @@ export class HorseSimulation {
       }
       o[j + 1] = v;
     }
+    const pos = this.orderPos;
+    for (let k = 0; k < o.length; k++) pos[o[k]] = k;
   }
 
   laneIndex(x: number): number {
@@ -585,8 +627,8 @@ export class HorseSimulation {
         const side = s === 0 ? pref : -pref;
         const nx = x + side * step * k;
         if (nx < -half || nx > half) continue;
-        // ordinary lane changes keep the streak corridors open; detours may use them
-        if (!wide && inCorridor(nx)) continue;
+        // lane changes keep the streak corridors open
+        if (inCorridor(nx)) continue;
         if (wide ? this.slotFree(nx, p, i, 1.2, 2.4) : this.slotFree(nx, p, i)) {
           this.laneTarget[i] = nx;
           return true;
@@ -852,7 +894,10 @@ export class HorseSimulation {
         if (t >= this.stateDuration[i]) this.setState(i, HorseState.RUN, 0);
         return false;
       case HorseState.FINISH:
-        this.targetSpeed[i] = HORSE.FINISH_SPEED;
+        // keep galloping through the line, ease off only well past it (no wall of
+        // finished horses in front of the ones still racing)
+        this.targetSpeed[i] =
+          this.progress[i] < this.course.length + HORSE.FINISH_RUNOUT ? this.baseSpeed[i] : HORSE.FINISH_SPEED;
         this.desiredVx[i] = 0;
         return false;
       case HorseState.AVOID:
@@ -884,10 +929,10 @@ export class HorseSimulation {
    * Knock a horse over: comedic tumble, auto-recovers after 1–1.6 s (+0.5 s getting up).
    * `gen` is the chain-reaction generation (0 = spontaneous / seeded).
    */
-  fall(i: number, side: number = 0, gen: number = 0): void {
+  fall(i: number, side: number = 0, gen: number = 0, downScale: number = 1): void {
     const st = this.state[i];
     if (this.grace[i] > 0 || st === HorseState.FALL || st === HorseState.RECOVER) return;
-    this.setState(i, HorseState.FALL, this.rng.range(HORSE.FALL_TIME_MIN, HORSE.FALL_TIME_MAX));
+    this.setState(i, HorseState.FALL, this.rng.range(HORSE.FALL_TIME_MIN, HORSE.FALL_TIME_MAX) * downScale);
     this.fallSide[i] = side !== 0 ? (side > 0 ? 1 : -1) : this.rng.sign();
     this.vy[i] = HORSE.FALL_HOP_VY * this.rng.range(0.7, 1.2);
     this.groundY[i] = this.layer[i] === Layer.C ? 0 : this.pileHeightAt(i);
@@ -898,10 +943,16 @@ export class HorseSimulation {
   }
 
   /** true if horse i is inside the fairness box right in front of the player */
+  /**
+   * true if horse i is inside the fairness window in front of the player: no NEW
+   * spontaneous / scripted accident may start there (≥ SAFE_SECONDS of warning at the
+   * player's current speed). Existing piles and chain reactions are not suppressed.
+   */
   inPlayerSafeBox(i: number): boolean {
     const p0 = FIELD.PLAYER;
     const dp = this.progress[i] - this.progress[p0];
-    return dp > -2 && dp < COLLISION.SAFE_AHEAD && Math.abs(this.x[i] - this.x[p0]) < COLLISION.SAFE_SIDE;
+    const ahead = Math.max(COLLISION.SAFE_AHEAD_MIN, this.speed[p0] * COLLISION.SAFE_SECONDS + 2);
+    return dp > -2 && dp < ahead && Math.abs(this.x[i] - this.x[p0]) < COLLISION.SAFE_SIDE;
   }
 
   /** Height of the top of the downed horses under horse i (pile model, hash = near field). */
@@ -951,6 +1002,16 @@ export class HorseSimulation {
     // crowding ahead slows the flow a little
     const crowd = 1 - clampf((ahead / ref - 0.5) * 0.25, 0, 0.15);
     this.targetSpeed[i] = this.baseSpeed[i] * crowd * this.pace(i);
+    // on / approaching a turn the field drifts towards the inside rail (shorter way round):
+    // the inside gets crowded, the outside opens up
+    if (
+      !this.blocked[i] &&
+      Math.abs(this.laneTarget[i] - x) < 0.2 &&
+      this.course.curvatureAt(p + 40) > 0 &&
+      this.rng.next() < LOD.INWARD_DRIFT
+    ) {
+      this.tryLaneChange(i, -1);
+    }
     // stuck behind a slower horse: change lane by one body width if (and only if) there is room
     if (this.blocked[i] && Math.abs(this.laneTarget[i] - x) < 0.2) {
       const pref = left < right ? -1 : right < left ? 1 : i & 1 ? 1 : -1;
@@ -959,8 +1020,10 @@ export class HorseSimulation {
     this.desiredVx[i] = clampf((this.laneTarget[i] - x) * 1.2, -1.0, 1.0);
 
     // rare group falls, more likely in dense regions (far-field "chain reaction" proxy)
-    const dens = here / ref;
-    const hz = LOD.C_FALL_HAZARD * dens * dens * LOD.C_PERIOD * this.accidentScale();
+    const dens = Math.max(0.5, here / ref);
+    let hz = LOD.C_FALL_HAZARD * dens * LOD.C_PERIOD * this.accidentScale();
+    // the leading pack races shoulder to shoulder: extra contact accidents up front
+    if (this.orderPos[i] < LOD.LEAD_PACK) hz += LOD.LEAD_HAZARD * SIM.DT * LOD.C_PERIOD * this.accidentScale();
     if (this.state[i] === HorseState.RUN && this.rng.next() < hz) {
       this.fall(i, 0, 0);
       this.groupEvents.push({ x, p, r: LOD.C_FALL_CLUSTER_RADIUS * this.rng.range(0.8, 1.6) });
@@ -992,13 +1055,84 @@ export class HorseSimulation {
         const i = o[k];
         const dp = this.progress[i] - e.p;
         if (this.progress[i] < pLo) break;
-        if (i === FIELD.PLAYER || this.layer[i] !== Layer.C) continue;
+        if (i === FIELD.PLAYER || (!e.allLayers && this.layer[i] !== Layer.C)) continue;
         const dx = this.x[i] - e.x;
         // horses just behind the event are the ones that pile in
         if (dx * dx + dp * dp > r2) continue;
-        if (this.state[i] === HorseState.RUN && this.rng.next() < 0.6) this.fall(i, Math.sign(dx), 1);
+        if (e.allLayers && this.inPlayerSafeBox(i)) continue;
+        if (this.state[i] === HorseState.RUN && this.rng.next() < (e.chance ?? 0.6)) this.fall(i, Math.sign(dx), 1, e.downScale ?? 1);
       }
     }
+  }
+
+  /**
+   * Accident "director" (Phase 1 review M3): at seeded times a big fall is seeded in the
+   * densest spot 40–80 m ahead of the player (2–4 s of warning at race speed — the hazard
+   * markers appear immediately). It then grows as an ordinary local chain. If the player is
+   * already clear of the field it happens in the nearest pack ahead instead.
+   */
+  private directorAccident(): void {
+    const p0 = FIELD.PLAYER;
+    const pp = this.progress[p0];
+    const px = this.x[p0];
+    let lo = pp + DIRECTOR.AHEAD_MIN;
+    let hi = pp + DIRECTOR.AHEAD_MAX;
+    // nothing ahead in range: use the closest group ahead (leading pack)
+    if (this.progress[this.order[0]] < lo) return;
+    const o = this.order;
+    const first = (pv: number) => {
+      let a = 0;
+      let b = o.length;
+      while (a < b) {
+        const m = (a + b) >> 1;
+        if (this.progress[o[m]] > pv) a = m + 1;
+        else b = m;
+      }
+      return a;
+    };
+    let k0 = first(hi);
+    if (k0 >= o.length || this.progress[o[k0]] < lo) {
+      // widen: the next horses ahead of the window
+      hi = this.progress[o[Math.max(0, k0 - 1)]] + 5;
+      lo = hi - 40;
+      k0 = first(hi);
+    }
+    // most events block the player's own line (jump it or go round), the rest hit the
+    // densest spot nearby (spectacle, and piles that change the traffic)
+    const inLine = this.rng.next() < DIRECTOR.IN_LINE;
+    let best = -1;
+    let bestScore = -Infinity;
+    for (let k = k0; k < o.length; k++) {
+      const i = o[k];
+      if (this.progress[i] < lo) break;
+      if (i === p0 || this.state[i] !== HorseState.RUN || this.inPlayerSafeBox(i)) continue;
+      const dx = Math.abs(this.x[i] - px);
+      if (dx > (inLine ? 5 : DIRECTOR.SIDE)) continue;
+      const score = inLine
+        ? -dx + this.rng.next()
+        : this.densityAt(this.x[i], this.progress[i]) - dx * 0.4 + this.rng.next() * 3;
+      if (score > bestScore) {
+        bestScore = score;
+        best = i;
+      }
+    }
+    if (best < 0) return;
+    this.directorEvents++;
+    this.grace[best] = 0;
+    // tumble towards the player's line so the pile lands across it
+    this.fall(best, px - this.x[best], 0, DIRECTOR.DOWN_SCALE);
+    if (inLine) {
+      const d = px - this.x[best];
+      this.x[best] += Math.max(-1.5, Math.min(1.5, d));
+    }
+    this.groupEvents.push({
+      x: this.x[best],
+      p: this.progress[best],
+      r: DIRECTOR.RADIUS,
+      allLayers: true,
+      chance: DIRECTOR.CHANCE,
+      downScale: DIRECTOR.DOWN_SCALE,
+    });
   }
 
   /** Layers A/B: lane keeping; both perceive hazards ahead and AVOID (B coarser/less often). */
@@ -1042,8 +1176,9 @@ export class HorseSimulation {
 
   /** Spontaneous misstep (A/B): density-driven, never right in front of the player. */
   private maybeMisstep(i: number): void {
-    const dens = this.densityAt(this.x[i], this.progress[i]) / LOD.DENSITY_REF;
-    const hz = COLLISION.MISSTEP_HAZARD * SIM.DT * dens * dens * this.accidentScale();
+    const dens = Math.max(0.5, this.densityAt(this.x[i], this.progress[i]) / LOD.DENSITY_REF);
+    let hz = COLLISION.MISSTEP_HAZARD * SIM.DT * dens * this.accidentScale();
+    if (this.orderPos[i] < LOD.LEAD_PACK) hz += LOD.LEAD_HAZARD * SIM.DT * this.accidentScale();
     if (this.rng.next() >= hz) return;
     if (this.inPlayerSafeBox(i)) return;
     if (this.rng.next() < COLLISION.MISSTEP_FALL_SHARE) this.fall(i, 0, 0);
@@ -1085,27 +1220,112 @@ export class HorseSimulation {
     const i = FIELD.PLAYER;
     const dt = SIM.DT;
     if (this.jumpCooldown > 0) this.jumpCooldown -= dt;
+    if (this.winded > 0) this.winded -= dt;
+    if (this.boostTime > 0) this.boostTime -= dt;
     const inControl = this.updateStateMachine(i);
+    this.playerJumpBookkeeping(i);
 
-    // dash gauge (drains while dashing, regenerates otherwise)
-    const wantsDash = intent.dash && inControl;
-    if (wantsDash && (this.dashing ? this.dashGauge > 0 : this.dashGauge >= PLAYER.DASH_MIN_TO_START)) {
+    // dash (design §4 + Phase 1 review M4): a fresh press starts it, it drains the gauge,
+    // running dry leaves the horse winded for a moment; while an upright horse blocks the
+    // lane right ahead the speed bonus is lost but the gauge still drains
+    const pressed = intent.dash && !this.dashHeldPrev;
+    this.dashHeldPrev = intent.dash;
+    if (this.dashing) {
+      if (!intent.dash || !inControl) this.dashing = false;
+    } else if (pressed && inControl && this.winded <= 0 && this.dashGauge >= PLAYER.DASH_MIN_TO_START) {
       this.dashing = true;
-      this.dashGauge = Math.max(0, this.dashGauge - PLAYER.DASH_DRAIN * dt);
+    }
+    if (this.dashing) {
+      this.dashGauge -= PLAYER.DASH_DRAIN * dt;
+      if (this.dashGauge <= 0) {
+        this.dashGauge = 0;
+        this.dashing = false;
+        this.winded = PLAYER.WINDED_TIME;
+      }
     } else {
-      this.dashing = false;
       this.dashGauge = Math.min(1, this.dashGauge + PLAYER.DASH_REGEN * dt);
     }
+    this.dashBlocked = this.dashing && this.uprightAhead(i, PLAYER.DASH_CLEAR_AHEAD);
     if (!inControl) {
       this.dashing = false;
       return;
     }
-    this.targetSpeed[i] = this.dashing ? PLAYER.DASH_SPEED : PLAYER.CRUISE_SPEED;
+    let target = PLAYER.CRUISE_SPEED * (this.winded > 0 ? PLAYER.WINDED_FACTOR : 1);
+    if (this.dashing && !this.dashBlocked) target = PLAYER.DASH_SPEED;
+    if (this.boostTime > 0) target += PLAYER.JUMP_BOOST;
+    this.targetSpeed[i] = target;
     this.desiredVx[i] = clampf(intent.steer, -1, 1) * PLAYER.LATERAL_MAX;
     if (intent.jump && this.y[i] <= 0 && this.jumpCooldown <= 0) {
       this.vy[i] = PLAYER.JUMP_VY;
       this.y[i] = 0.01;
       this.jumpCooldown = PLAYER.JUMP_COOLDOWN + (2 * PLAYER.JUMP_VY) / HORSE.GRAVITY;
+      this.clearedThisJump = false;
+      this.jumpsTaken++;
+    }
+  }
+
+  /** an upright horse in the player's lane within `ahead` metres (hash: last tick) */
+  private uprightAhead(i: number, ahead: number): boolean {
+    const x = this.x[i];
+    const p = this.progress[i];
+    const found = this.hash.query(x - 1, p + 0.5, x + 1, p + ahead);
+    const res = this.hash.result;
+    for (let r = 0; r < found; r++) {
+      const j = res[r];
+      if (j === i) continue;
+      const st = this.state[j];
+      if (st === HorseState.FALL || st === HorseState.RECOVER) continue;
+      const dp = this.progress[j] - p;
+      if (dp > 0.5 && dp < ahead && Math.abs(this.x[j] - x) < 0.95) return true;
+    }
+    return false;
+  }
+
+  /** jump rewards: passing over a downed horse and landing safely refills the gauge + boost */
+  private playerJumpBookkeeping(i: number): void {
+    const airborne = this.y[i] > 0.05;
+    if (airborne) {
+      const x = this.x[i];
+      const p = this.progress[i];
+      const found = this.hash.query(x - 1.6, p - 2.4, x + 1.6, p + 2.4);
+      const res = this.hash.result;
+      for (let r = 0; r < found; r++) {
+        const j = res[r];
+        if (j === i || this.state[j] !== HorseState.FALL) continue;
+        if (Math.abs(this.x[j] - x) < 1.4 && Math.abs(this.progress[j] - p) < 2.3) this.clearedThisJump = true;
+      }
+    } else if (this.wasAirborne) {
+      if (this.clearedThisJump && this.state[i] !== HorseState.FALL) {
+        this.jumpsCleared++;
+        this.dashGauge = Math.min(1, this.dashGauge + PLAYER.JUMP_CLEAR_GAUGE);
+        this.boostTime = PLAYER.JUMP_BOOST_TIME;
+        this.winded = 0;
+      }
+      this.clearedThisJump = false;
+    }
+    this.wasAirborne = airborne;
+  }
+
+  /** passes made by the player last tick: small gauge refill, near misses a bigger one */
+  private playerPassBookkeeping(i: number): void {
+    const x = this.x[i];
+    const p = this.progress[i];
+    const pPrev = this.prevProgress[i];
+    const found = this.hash.query(x - 1.6, p - 3, x + 1.6, p + 1);
+    const res = this.hash.result;
+    for (let r = 0; r < found; r++) {
+      const j = res[r];
+      if (j === i) continue;
+      if (!(this.prevProgress[j] > pPrev && this.progress[j] <= p)) continue;
+      this.playerPasses++;
+      let g = PLAYER.PASS_GAUGE;
+      const st = this.state[j];
+      const dx = Math.abs(this.x[j] - x);
+      if (st !== HorseState.FALL && dx > 0.9 && dx < 1.4 && this.speed[i] > 17) {
+        this.nearMisses++;
+        g += PLAYER.NEAR_MISS_GAUGE;
+      }
+      this.dashGauge = Math.min(1, this.dashGauge + g);
     }
   }
 
@@ -1115,6 +1335,8 @@ export class HorseSimulation {
 
   private integrate(): void {
     const dt = SIM.DT;
+    const course = this.course;
+    const curv = (s: number) => course.curvatureAt(s);
     const half = this.course.width * 0.5 - 0.8;
     const p0 = FIELD.PLAYER;
     for (let i = 0; i < this.n; i++) {
@@ -1133,10 +1355,16 @@ export class HorseSimulation {
       if (sp < 0) sp = 0;
       this.speed[i] = sp;
 
-      // lateral
+      // lateral. Upright NPCs drift out of the open "streak" corridors (they keep them open)
       const latAcc = isPlayer ? PLAYER.LATERAL_ACCEL : HORSE.LATERAL_ACCEL;
       let vx = this.vx[i];
-      const dvx = this.desiredVx[i] - vx;
+      let want = this.desiredVx[i];
+      if (!isPlayer && (st === HorseState.RUN || st === HorseState.AVOID) && inCorridor(this.x[i])) {
+        const edge = corridorExit(this.x[i]);
+        want = edge > this.x[i] ? FIELD.CORRIDOR_EXIT_SPEED : -FIELD.CORRIDOR_EXIT_SPEED;
+        if (Math.abs(this.laneTarget[i] - this.x[i]) < 3) this.laneTarget[i] = edge;
+      }
+      const dvx = want - vx;
       const maxDv = latAcc * dt;
       vx += dvx > maxDv ? maxDv : dvx < -maxDv ? -maxDv : dvx;
       let x = this.x[i] + vx * dt;
@@ -1149,7 +1377,9 @@ export class HorseSimulation {
       }
       this.vx[i] = vx;
       this.x[i] = x;
-      this.progress[i] += sp * dt;
+      // oval: on a turn the inside (x < 0) covers more centreline per world metre
+      const k = curv(this.progress[i]);
+      this.progress[i] += k === 0 ? sp * dt : (sp * dt) / (1 + k * x);
 
       // vertical (jumps, tumble bounces)
       let y = this.y[i];
@@ -1194,6 +1424,14 @@ export function inCorridor(x: number): boolean {
   const sp = FIELD.CORRIDOR_SPACING;
   const m = (((x - FIELD.CORRIDOR_OFFSET) % sp) + sp) % sp;
   return m < FIELD.CORRIDOR_HALF || m > sp - FIELD.CORRIDOR_HALF;
+}
+
+/** nearest x just outside the corridor containing x */
+export function corridorExit(x: number): number {
+  const sp = FIELD.CORRIDOR_SPACING;
+  const c = Math.round((x - FIELD.CORRIDOR_OFFSET) / sp) * sp + FIELD.CORRIDOR_OFFSET;
+  const h = FIELD.CORRIDOR_HALF + 0.05;
+  return x >= c ? c + h : c - h;
 }
 
 function clampf(v: number, lo: number, hi: number): number {

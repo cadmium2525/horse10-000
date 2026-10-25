@@ -260,7 +260,8 @@ export function resolveCollisions(sim: HorseSimulation): void {
       if (closing > 0) {
         // brushing past a downed horse (no trip) mostly deflects sideways instead of stopping;
         // the player shoulders through NPCs (they are shoved aside) rather than stopping dead
-        const playerRear = rear === FIELD.PLAYER && state[front] !== HorseState.FALL;
+        // (not while dashing: ramming the crowd at full tilt is just a collision)
+        const playerRear = rear === FIELD.PLAYER && state[front] !== HorseState.FALL && !sim.dashing;
         speed[rear] -= closing * (downI !== downJ ? 0.2 : playerRear ? PLAYER.SHOULDER_LOSS : 0.6);
         if (playerRear) vx[front] += (x[front] >= x[rear] ? 1 : -1) * PLAYER.SHOULDER_SHOVE;
         if (state[front] !== HorseState.FALL) speed[front] += closing * 0.15;
@@ -286,8 +287,9 @@ export function resolveCollisions(sim: HorseSimulation): void {
   }
 }
 
-function playerMult(i: number): number {
-  return i === FIELD.PLAYER ? PLAYER.STUMBLE_MULT : 1;
+/** player accident multiplier: near-neutral, but dashing is risky (Phase 1 review M4) */
+function playerMult(sim: HorseSimulation, i: number): number {
+  return i === FIELD.PLAYER ? PLAYER.STUMBLE_MULT * (sim.dashing ? PLAYER.DASH_RISK : 1) : 1;
 }
 
 /** Runner hits a fallen horse at ground level. */
@@ -297,7 +299,9 @@ function trip(sim: HorseSimulation, runner: number, fallen: number, impact: numb
   if (sim.y[runner] > 0.05 && sim.vy[runner] < 0) {
     if (sim.eventCooldown[runner] > 0) return;
     sim.eventCooldown[runner] = COLLISION.EVENT_COOLDOWN;
-    const pl = (runner === FIELD.PLAYER ? COLLISION.LANDING_FAIL : COLLISION.LANDING_FAIL_NPC) * Math.pow(sim.tuning.chainDecay, sim.chainGen[fallen]);
+    const pl =
+      (runner === FIELD.PLAYER ? COLLISION.LANDING_FAIL * (sim.dashing ? PLAYER.DASH_LANDING_RISK : 1) : COLLISION.LANDING_FAIL_NPC) *
+      Math.pow(sim.tuning.chainDecay, sim.chainGen[fallen]);
     if (sim.rng.next() < pl) {
       sim.fall(runner, Math.sign(sim.x[runner] - sim.x[fallen]) || 1, sim.chainGen[fallen] + 1);
       sim.tripFalls++;
@@ -308,9 +312,8 @@ function trip(sim: HorseSimulation, runner: number, fallen: number, impact: numb
   if (sim.y[runner] > 0.4) return; // rising past the edge of a pile is a graze, not a trip
   sim.eventCooldown[runner] = COLLISION.EVENT_COOLDOWN;
   const gen = sim.chainGen[fallen] + 1;
-  let p = (COLLISION.TRIP_BASE + COLLISION.TRIP_PER_IMPACT * impact) * playerMult(runner);
+  let p = (COLLISION.TRIP_BASE + COLLISION.TRIP_PER_IMPACT * impact) * playerMult(sim, runner);
   p *= sim.accidentScale() * Math.pow(sim.tuning.chainDecay, gen - 1);
-  if (runner !== FIELD.PLAYER && sim.inPlayerSafeBox(runner)) p *= COLLISION.SAFE_TRIP_MULT;
   if (sim.layer[runner] === Layer.B) p *= COLLISION.TRIP_MULT_B;
   if (p > 0.95) p = 0.95;
   const r = sim.rng.next();
@@ -336,11 +339,9 @@ function upright(sim: HorseSimulation, i: number, j: number, rear: number, impac
     const h = v === 0 ? rear : other;
     if (sim.eventCooldown[h] > 0 || !sim.canBeKnocked(h)) continue;
     sim.eventCooldown[h] = COLLISION.EVENT_COOLDOWN;
-    const pv = (v === 0 ? p : p * 0.4) * playerMult(h);
+    const pv = (v === 0 ? p : p * 0.4) * playerMult(sim, h);
     if (sim.state[h] === HorseState.STUMBLE) {
-      // NPC-vs-NPC bumps never put a horse down right in front of the player (fairness)
-      const shielded = h !== FIELD.PLAYER && i !== FIELD.PLAYER && j !== FIELD.PLAYER && sim.inPlayerSafeBox(h);
-      if (!shielded && impact > 1 && sim.rng.next() < COLLISION.STUMBLE_TO_FALL * playerMult(h) * sim.accidentScale()) sim.fall(h, 0, 0);
+      if (impact > 1 && sim.rng.next() < COLLISION.STUMBLE_TO_FALL * playerMult(sim, h) * sim.accidentScale()) sim.fall(h, 0, 0);
     } else if (sim.rng.next() < pv) {
       sim.stumble(h);
     }

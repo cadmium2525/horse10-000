@@ -97,7 +97,7 @@ describe('fairness: no sudden unavoidable pile right in front of the player', ()
         if (sim.fallCount[i] === prevFalls[i] || sim.chainGen[i] !== 0) continue;
         // safe box minus a margin for the movement within the tick after the decision
         const dp = sim.progress[i] - sim.progress[0];
-        if (!(dp > -1 && dp < COLLISION.SAFE_AHEAD - 1 && Math.abs(sim.x[i] - sim.x[0]) < COLLISION.SAFE_SIDE - 0.5)) continue;
+        if (!(dp > -1 && dp < COLLISION.SAFE_AHEAD_MIN - 1 && Math.abs(sim.x[i] - sim.x[0]) < COLLISION.SAFE_SIDE - 0.5)) continue;
         // a horse the player itself barged into is fair game
         const touching = Math.abs(sim.x[i] - sim.x[0]) < 1.2 && Math.abs(sim.progress[i] - sim.progress[0]) < 2.6;
         if (!touching) violations++;

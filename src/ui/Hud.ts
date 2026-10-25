@@ -23,6 +23,9 @@ export interface HudState {
   finalStretch: boolean;
   /** false after the finish line (no more callouts) */
   racing: boolean;
+  /** dash state details */
+  winded: boolean;
+  dashBlocked: boolean;
 }
 
 /**
@@ -44,12 +47,15 @@ export class Hud {
   private readonly countEl: HTMLDivElement;
   private readonly bannerEl: HTMLDivElement;
   private readonly finalEl: HTMLDivElement;
+  private readonly toastEl: HTMLDivElement;
+  private toastHold = 0;
   private lastRank = -1;
   /** last burst sequence number seen */
   private lastBurst = -1;
   private burstHold = 0;
   private bannerTimer = 0;
   private lastCount = '';
+  private lastBumpAt = 0;
 
   constructor(parent: HTMLElement, onPause: () => void) {
     this.rankEl = h('span', { class: 'rank-num' });
@@ -68,6 +74,7 @@ export class Hud {
     this.countEl = h('div', { class: 'hud-count hidden' });
     this.bannerEl = h('div', { class: 'hud-banner hidden' });
     this.finalEl = h('div', { class: 'hud-final hidden', text: 'ラストスパート！' });
+    this.toastEl = h('div', { class: 'hud-toast hidden' });
     this.el = h('div', { class: 'hud hidden' }, [
       h('div', { class: 'hud-rank' }, [this.rankEl, h('span', { class: 'rank-total', text: ' / 10,000' })]),
       h('div', { class: 'hud-right' }, [this.remainEl, this.timeEl]),
@@ -76,6 +83,7 @@ export class Hud {
       this.dashEl,
       this.burstEl,
       this.finalEl,
+      this.toastEl,
       this.introEl,
       this.countEl,
       this.bannerEl,
@@ -106,7 +114,10 @@ export class Hud {
     const rank = Math.round(s.rank);
     if (rank !== this.lastRank) {
       this.rankEl.textContent = formatInt(rank);
-      if (this.lastRank > 0 && rank < this.lastRank) {
+      // a small pulse at most every 400 ms (the rank changes at 10 Hz while passing)
+      const now = performance.now();
+      if (this.lastRank > 0 && rank < this.lastRank && now - this.lastBumpAt > 400) {
+        this.lastBumpAt = now;
         this.rankEl.classList.remove('bump');
         void this.rankEl.offsetWidth; // restart the CSS animation
         this.rankEl.classList.add('bump');
@@ -121,7 +132,9 @@ export class Hud {
     this.barLeader.style.left = pct(s.leaderProgress);
     this.dashFill.style.width = pct(s.dash);
     this.dashEl.classList.toggle('active', s.dashing);
-    this.dashEl.classList.toggle('low', s.dash < 0.2);
+    this.dashEl.classList.toggle('low', s.dash < 0.25);
+    this.dashEl.classList.toggle('winded', s.winded);
+    this.dashEl.classList.toggle('blocked', s.dashBlocked);
     this.el.classList.toggle('final', s.finalStretch);
     show(this.finalEl, s.finalStretch && s.remaining > 30);
 
@@ -159,10 +172,21 @@ export class Hud {
     }
     show(this.countEl, count !== '');
 
+    if (this.toastHold > 0) {
+      this.toastHold -= dt;
+      if (this.toastHold <= 0) show(this.toastEl, false);
+    }
     if (this.bannerTimer > 0) {
       this.bannerTimer -= dt;
       if (this.bannerTimer <= 0) show(this.bannerEl, false);
     }
+  }
+
+  /** short feedback line (nice jump, near miss, out of breath ...) */
+  toast(text: string, cls = ''): void {
+    this.toastEl.className = `hud-toast ${cls}`;
+    this.toastEl.textContent = text;
+    this.toastHold = 1.1;
   }
 
   hideBanner(): void {
