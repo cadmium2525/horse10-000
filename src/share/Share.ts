@@ -84,8 +84,12 @@ export async function shareImage(blob: Blob, fileName: string, text: string, url
 
 /** X Web Intent in a new tab (text + URL pre-filled; the user attaches the saved image) */
 export function openXIntent(text: string, url: string): boolean {
-  const win = window.open(xIntentUrl(text, url), '_blank', 'noopener');
-  if (!win) {
+  // no 'noopener' feature: with it window.open always returns null, which would look like a
+  // blocked popup and navigate the game tab away. Detach the opener by hand instead.
+  const win = window.open(xIntentUrl(text, url), '_blank');
+  if (win) {
+    win.opener = null;
+  } else {
     // popup blocked: navigate this tab instead
     location.href = xIntentUrl(text, url);
   }
