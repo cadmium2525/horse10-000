@@ -16,6 +16,7 @@ import { HorseSimulation, HorseState, Layer, STATE_NAMES } from './HorseSimulati
 import { Input } from './Input';
 import { FixedStepper } from './Loop';
 import { AutoBot, PlayerController } from './PlayerController';
+import { chooseInitialLevel, estimateFullTickMs } from './StartupBench';
 import { RaceStats, computeRank, makeResult, type RaceResult } from './Race';
 
 export interface GameOptions {
@@ -142,7 +143,7 @@ export class Game {
       maxPixelRatio: opts.pixelRatio ?? dpr,
       minPixelRatio: Math.min(dpr, 0.6),
       fixed: opts.pixelRatio !== undefined,
-      initialLevel: opts.quality ?? (this.isTouch ? 1 : 2),
+      initialLevel: opts.quality ?? chooseInitialLevel(estimateFullTickMs(), this.isTouch),
       minBudgetHz: this.isTouch ? undefined : 60,
     });
     this.world.applyQuality(this.quality.state);

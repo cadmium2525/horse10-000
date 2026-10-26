@@ -87,8 +87,11 @@ export const HORSE = {
   FALLEN_HEIGHT: 0.75,
   /** a horse falling onto downed horses rests this fraction of their height above them */
   PILE_STACK: 0.8,
-  /** tallest pile (m): 3 layers. Player jump peak is 1.6 m => 0–1 layers are jumpable */
+  /** tallest pile (m): 3 layers */
   PILE_MAX: 1.8,
+  /** piles whose top is at most this high are cleared by a normal jump (peak ≈ 2.5 m): one or
+   *  two layers — yellow markers; three layers are red (go round) */
+  JUMPABLE_TOP: 1.9,
 
   NPC_SPEED_MIN: 13.45,
   NPC_SPEED_MAX: 15.55,
@@ -97,7 +100,7 @@ export const HORSE = {
   FRONT_BIAS: 0.6,
   PACE_AMPLITUDE: 0.03,
   /** NPC stamina: pace drops linearly by up to FADE over the last FADE_DIST m */
-  FADE: 0.18,
+  FADE: 0.06,
   FADE_DIST: 500,
   ACCEL: 4.5,
   /** acceleration below 4 m/s */
@@ -125,8 +128,10 @@ export const HORSE = {
 } as const;
 
 export const PLAYER = {
-  CRUISE_SPEED: 22,
+  CRUISE_SPEED: 21,
   DASH_SPEED: 29,
+  /** hard ceiling on the player's target speed (dash + chained landing boosts) */
+  MAX_SPEED: 36,
   ACCEL: 9,
   /** acceleration while dashing (the burst must be felt within a 2 s gauge) */
   DASH_ACCEL: 14,
@@ -337,7 +342,7 @@ export const DIRECTOR = {
   SCATTER_AHEAD: 30,
   SCATTER_HALF: 4,
   /** share of events placed across the player's own line */
-  IN_LINE: 0.6,
+  IN_LINE: 0.8,
 } as const;
 
 export const RACE = {

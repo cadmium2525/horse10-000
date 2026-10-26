@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CORE_SEEDS, DIFFICULTY_SEEDS, HUMAN_250, mean, median, report, runRace, type RaceRun } from './helpers/race';
+import { DIFFICULTY_SEEDS, HUMAN_250, mean, median, report, runRace, type RaceRun } from './helpers/race';
 
 /**
  * Difficulty part 3 (Phase 1b review M2/M3/M4): decisions that should matter for a human
@@ -31,15 +31,16 @@ describe('difficulty: dash, line choice, no input', () => {
     expect(Math.abs(tIn - tOut) / tOut).toBeLessThanOrEqual(0.2);
   }, 900000);
 
-  it('M4: a player who never touches the controls still finishes inside the 150 s limit, far back', () => {
-    const passive = CORE_SEEDS.map((s) => runRace(s, null));
+  it('P2-1: a player who never touches the controls finishes inside the 150 s limit, 1,500–3,000th', () => {
+    const passive = DIFFICULTY_SEEDS.map((s) => runRace(s, null));
     report('passive', passive);
     for (const r of passive) {
       expect(r.time).toBeGreaterThan(0);
       expect(r.time).toBeLessThanOrEqual(150);
-      // natural gaps let a straight runner through now; it still ends well adrift
-      expect(r.gap).toBeGreaterThanOrEqual(8);
+      expect(r.gap).toBeGreaterThanOrEqual(10);
     }
-    expect(median(passive.map((r) => r.rank))).toBeGreaterThanOrEqual(200);
+    const m = median(passive.map((r) => r.rank));
+    expect(m).toBeGreaterThanOrEqual(1500);
+    expect(m).toBeLessThanOrEqual(3000);
   }, 900000);
 });

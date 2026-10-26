@@ -89,3 +89,24 @@ describe('M4: quality changes are deferred to the next frame', () => {
     expect(pending).not.toBe(q.state);
   });
 });
+
+describe('startup benchmark → initial quality (design §5)', () => {
+  it('maps the estimated full-field tick to a starting LOD level', async () => {
+    const { chooseInitialLevel } = await import('../src/game/StartupBench');
+    expect(chooseInitialLevel(2, false)).toBe(2);
+    expect(chooseInitialLevel(9, false)).toBe(1);
+    expect(chooseInitialLevel(20, false)).toBe(0);
+    expect(chooseInitialLevel(3, true)).toBe(2);
+    expect(chooseInitialLevel(8, true)).toBe(1);
+    expect(chooseInitialLevel(15, true)).toBe(0);
+    expect(chooseInitialLevel(NaN, true)).toBe(1);
+  });
+  it('the probe itself is cheap and finite', async () => {
+    const { estimateFullTickMs } = await import('../src/game/StartupBench');
+    const t0 = performance.now();
+    const est = estimateFullTickMs();
+    expect(Number.isFinite(est)).toBe(true);
+    expect(est).toBeGreaterThan(0);
+    expect(performance.now() - t0).toBeLessThan(3000);
+  });
+});

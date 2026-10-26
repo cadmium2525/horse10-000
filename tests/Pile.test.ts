@@ -34,7 +34,7 @@ describe('horse pile model', () => {
     expect(sim.groundY[2]).toBeLessThanOrEqual(HORSE.PILE_MAX);
   });
 
-  it('a low pile (one horse) can be jumped; a two-high pile cannot', () => {
+  it('a low pile (one or two horses) can be jumped; a three-high pile cannot', () => {
     // low: one downed horse 7 m ahead
     const low = startedSim(2);
     layDown(low, 1, low.x[0], low.progress[0] + 7, 0);
@@ -44,14 +44,25 @@ describe('horse pile model', () => {
     expect(low.fallCount[0]).toBe(0);
     expect(low.progress[0]).toBeGreaterThan(low.progress[1] + 2);
 
-    // tall: two stacked downed horses (top at 0.6 + 0.75 = 1.35 m + bounce margin)
-    const tall = startedSim(3);
-    layDown(tall, 1, tall.x[0], tall.progress[0] + 7, 0);
-    layDown(tall, 2, tall.x[0], tall.progress[0] + 7.3, 0.9);
+    // two-high (top 0.6 + 0.75 = 1.35 m): still under the jump arc
+    const two = startedSim(3);
+    layDown(two, 1, two.x[0], two.progress[0] + 7, 0);
+    layDown(two, 2, two.x[0], two.progress[0] + 7.3, 0.6);
+    two.grace[0] = 0;
+    two.step({ steer: 0, jump: true, dash: false });
+    for (let t = 0; t < 30; t++) two.step();
+    expect(two.fallCount[0]).toBe(0);
+    expect(two.progress[0]).toBeGreaterThan(two.progress[2] + 2);
+
+    // tall: three stacked downed horses (top ≈ 2.35 m), right in front: no way over
+    const tall = startedSim(4);
+    layDown(tall, 1, tall.x[0], tall.progress[0] + 4, 0);
+    layDown(tall, 2, tall.x[0], tall.progress[0] + 4.2, 0.8);
+    layDown(tall, 3, tall.x[0], tall.progress[0] + 4.4, 1.6);
     tall.grace[0] = 0;
     tall.step({ steer: 0, jump: true, dash: false });
     for (let t = 0; t < 30; t++) tall.step();
-    expect(tall.fallCount[0] > 0 || tall.progress[0] < tall.progress[2]).toBe(true);
+    expect(tall.fallCount[0] > 0 || tall.progress[0] < tall.progress[3]).toBe(true);
   });
 
   it('landing a jump onto a downed horse is a failed landing', () => {

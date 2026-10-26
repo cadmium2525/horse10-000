@@ -189,19 +189,23 @@ export class AutoBot {
         const top = sim.groundY[j] + sim.y[j] - sim.groundY[j] + 0.75;
         // jump when the arc passes over it (above its top, before landing); the take-off
         // point follows from the arc, no fixed distance
-        if (this.canJump && top < 1.2) {
+        if (this.canJump && top <= HORSE.JUMPABLE_TOP) {
           const tD = Math.max(0, d - lead - 1.0) / Math.max(1, mySpeed - sim.speed[j]);
           const yD = PLAYER.JUMP_VY * tD - 0.5 * HORSE.GRAVITY * tD * tD;
           if (tD > airtime * 0.2 && tD < airtime * 0.5 && yD > top + 0.15 && d > 2.5) jump = true;
         }
-        if (d > landAt - 3 && d < landAt + 3) {
+        if (d > landAt - 2 && d < landAt + 2) {
           landingBlocked = true;
           blockWhy = 'down';
         }
-        // anything too tall anywhere under the flight path makes the jump a crash
+        // a pile taller than the arc where we pass over it makes the jump a crash
         if (d < landAt + 1 && top >= 1.25) {
-          landingBlocked = true;
-          blockWhy = 'tall';
+          const tP = Math.max(0, d - lead - 1.0) / Math.max(1, mySpeed - sim.speed[j]);
+          const yP = PLAYER.JUMP_VY * tP - 0.5 * HORSE.GRAVITY * tP * tP;
+          if (yP < top + 0.15) {
+            landingBlocked = true;
+            blockWhy = 'tall';
+          }
         }
         if (d < nearestDown) {
           nearestDown = d;
@@ -221,7 +225,7 @@ export class AutoBot {
           // (landing behind a standing horse is just a bump; flying into its back is not)
           const clearH = sim.speed[j] < HORSE.JAM_SPEED ? HORSE.FALLEN_HEIGHT : HORSE.BACK_HEIGHT;
           // (only a horse we would hit head-on at take-off; a graze on the way up is a bump)
-          if (yAt < clearH + 0.1 && tReach < airtime * 0.12) {
+          if (yAt < clearH + 0.1 && tReach < airtime * 0.12 && sim.speed[j] < mySpeed - 12) {
             landingBlocked = true;
             blockWhy = 'upright';
           }

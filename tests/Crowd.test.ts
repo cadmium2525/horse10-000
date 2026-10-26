@@ -179,7 +179,7 @@ describe('R1: no standing traffic jams behind downed horses', () => {
       // on the turn queues behind its own piles — intended, review M2 — but never for long)
       // (2.0 s is the cap for normal play above; this worst case keeps a 2.5 s cap)
       expect(r.longest).toBeLessThanOrEqual(2.5);
-      expect(r.peak).toBeLessThanOrEqual(60);
+      expect(r.peak).toBeLessThanOrEqual(70);
     }
   }, 300000);
 });

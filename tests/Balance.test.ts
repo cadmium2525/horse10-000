@@ -54,10 +54,11 @@ describe('balance / reachability', () => {
       );
       expect(leader).toBeGreaterThanOrEqual(60);
       expect(leader).toBeLessThanOrEqual(90);
-      expect(leader - ideal).toBeGreaterThanOrEqual(3);
+      // (Phase 1c review P2-1: the player is not overwhelmingly faster than the field)
+      expect(leader - ideal).toBeGreaterThanOrEqual(10);
       // (upper bound only guards against a broken course/speed setup: an empty-track run
       // is far faster than anything possible through 9,999 horses)
-      expect(leader - ideal).toBeLessThanOrEqual(30);
+      expect(leader - ideal).toBeLessThanOrEqual(16);
     }, 60000);
   }
 });

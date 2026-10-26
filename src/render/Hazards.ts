@@ -11,7 +11,7 @@ import { HorseState, type HorseSimulation } from '../game/HorseSimulation';
  *    distance so a pile is readable 150 m+ ahead (> 7 s at race speed).
  *  - dust puffs where a horse has just gone down (also visible from far away).
  */
-export const JUMPABLE_TOP = 1.2;
+export const JUMPABLE_TOP = HORSE.JUMPABLE_TOP;
 
 const MAX_MARKERS = 700;
 const MAX_DUST = 900;

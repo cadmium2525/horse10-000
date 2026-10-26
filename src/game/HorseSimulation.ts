@@ -203,6 +203,26 @@ export class HorseSimulation {
     this.course = course;
     this.seed = seed;
     this.tuning = { ...DEFAULT_TUNING, ...tuning };
+    // V8 field representation: scalars that will hold fractions start out as small integers
+    // (0, 1) and get generalised the first time a fraction arrives — late in a race that
+    // deoptimises the hot loops (10–20 ms spikes). Prime them as doubles up front; values and
+    // determinism are unchanged.
+    this.radiusA = 0.5;
+    this.radiusA = 0;
+    this.radiusB = 0.5;
+    this.radiusB = 0;
+    this.dashGauge = 0.5;
+    this.dashGauge = 1;
+    this.jumpCooldown = 0.5;
+    this.jumpCooldown = 0;
+    this.winded = 0.5;
+    this.winded = 0;
+    this.boostTime = 0.5;
+    this.boostTime = 0;
+    this.lastClearTime = 0.5;
+    this.lastClearTime = -99;
+    this.maxCorrectionThisTick = 0.5;
+    this.maxCorrectionThisTick = 0;
     this.rng = new Rng(deriveSeed(seed, 'sim'));
 
     this.x = new Float32Array(n);
@@ -1053,7 +1073,8 @@ export class HorseSimulation {
     hz *= this.tuning.background;
     if (this.state[i] === HorseState.RUN && this.rng.next() < hz) {
       this.fall(i, 0, 0);
-      this.groupEvents.push({ x, p, r: LOD.C_FALL_CLUSTER_RADIUS * this.rng.range(0.8, 1.6) });
+      // (same object shape as the scripted events: one hidden class for the hot loop)
+      this.groupEvents.push({ x, p, r: LOD.C_FALL_CLUSTER_RADIUS * this.rng.range(0.8, 1.6), allLayers: false, chance: 0.6, downScale: 1 });
     }
   }
 
@@ -1369,6 +1390,7 @@ export class HorseSimulation {
     if (this.boostTime > 0 && !this.uprightAhead(i, PLAYER.BOOST_CLEAR_AHEAD)) {
       target += PLAYER.JUMP_BOOST * (1 + PLAYER.JUMP_CHAIN_BONUS * Math.min(this.jumpChain - 1, 2));
     }
+    if (target > PLAYER.MAX_SPEED) target = PLAYER.MAX_SPEED;
     // hard sideways steering at a gallop costs forward speed (swerving round a pile is not
     // free; a clean jump keeps the pace)
     target *= 1 - (PLAYER.STEER_DRAG * Math.abs(this.vx[i])) / PLAYER.LATERAL_MAX;
