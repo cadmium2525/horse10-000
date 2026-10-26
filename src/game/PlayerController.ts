@@ -1,4 +1,4 @@
-import { COURSE, FIELD, PLAYER } from './Config';
+import { COURSE, FIELD, HORSE, PLAYER } from './Config';
 import { HorseState, type HorseSimulation, type PlayerIntent } from './HorseSimulation';
 import type { Input } from './Input';
 
@@ -71,6 +71,9 @@ export class AutoBot {
   private heldTicks = 0;
   /** stats */
   jumpRequests = 0;
+  /** why jump chances were passed up (diagnostics): landing on a downed horse, a tall pile,
+   *  an upright horse in the arc */
+  readonly jumpBlocks = { down: 0, tall: 0, upright: 0 };
 
   constructor(opts: BotOptions | number = {}) {
     const o = typeof opts === 'number' ? { skill: opts } : opts;
@@ -170,9 +173,11 @@ export class AutoBot {
     // a pile seen seconds ahead is a predictable event: a human times the jump for their own
     // latency (only surprises suffer the full reaction delay)
     const lead = (mySpeed * this.delayTicks) / 30;
+    const airtime = (2 * PLAYER.JUMP_VY) / HORSE.GRAVITY;
     const jumpAt = 2.4 + mySpeed * 0.18 + lead;
-    const landAt = mySpeed * 0.78 + lead;
+    const landAt = mySpeed * airtime * 0.97 + lead;
     let landingBlocked = false;
+    let blockWhy: 'down' | 'tall' | 'upright' = 'down';
     let nearestDown = Infinity;
     let nearestDownX = 0;
     for (let r = 0; r < found; r++) {
@@ -182,16 +187,46 @@ export class AutoBot {
       if (d <= 0) continue;
       if (sim.state[j] === HorseState.FALL) {
         const top = sim.groundY[j] + sim.y[j] - sim.groundY[j] + 0.75;
-        if (this.canJump && top < 1.2 && d > jumpAt - 1.2 && d < jumpAt + 0.8) jump = true;
-        if (d > landAt - 3 && d < landAt + 3) landingBlocked = true;
+        // jump when the arc passes over it (above its top, before landing); the take-off
+        // point follows from the arc, no fixed distance
+        if (this.canJump && top < 1.2) {
+          const tD = Math.max(0, d - lead - 1.0) / Math.max(1, mySpeed - sim.speed[j]);
+          const yD = PLAYER.JUMP_VY * tD - 0.5 * HORSE.GRAVITY * tD * tD;
+          if (tD > airtime * 0.2 && tD < airtime * 0.5 && yD > top + 0.15 && d > 2.5) jump = true;
+        }
+        if (d > landAt - 3 && d < landAt + 3) {
+          landingBlocked = true;
+          blockWhy = 'down';
+        }
         // anything too tall anywhere under the flight path makes the jump a crash
-        if (d < landAt + 1 && top >= 1.25) landingBlocked = true;
+        if (d < landAt + 1 && top >= 1.25) {
+          landingBlocked = true;
+          blockWhy = 'tall';
+        }
         if (d < nearestDown) {
           nearestDown = d;
           nearestDownX = sim.x[j];
         }
-      } else if (d < clear) {
-        clear = d;
+      } else {
+        if (d < clear) clear = d;
+        // an upright horse we would reach while still below its back, or that would be under
+        // us when we come down, blocks the jump (it clears horses mid-arc, not at take-off or
+        // on landing)
+        if (Math.abs(sim.x[j] - px) < 1.2) {
+          const closing = Math.max(0.5, mySpeed - sim.speed[j]);
+          const tReach = Math.max(0, d - 2.2) / closing;
+          const yAt = PLAYER.JUMP_VY * tReach - 0.5 * HORSE.GRAVITY * tReach * tReach;
+          const airtime = (2 * PLAYER.JUMP_VY) / HORSE.GRAVITY;
+          const landRel = closing * airtime; // where it is relative to us when we land
+          // (landing behind a standing horse is just a bump; flying into its back is not)
+          const clearH = sim.speed[j] < HORSE.JAM_SPEED ? HORSE.FALLEN_HEIGHT : HORSE.BACK_HEIGHT;
+          // (only a horse we would hit head-on at take-off; a graze on the way up is a bump)
+          if (yAt < clearH + 0.1 && tReach < airtime * 0.12) {
+            landingBlocked = true;
+            blockWhy = 'upright';
+          }
+          void landRel;
+        }
       }
     }
     // dashing is risky in traffic: keep a buffer beside the corridor too
@@ -202,7 +237,10 @@ export class AutoBot {
       // (horses alongside don't matter, the ones we would cut in front of diagonally do)
       if (d > 1.5 && d < 6 && Math.abs(sim.x[j] - px) < 1.6) clear = Math.min(clear, d + 3);
     }
-    if (landingBlocked) jump = false;
+    if (landingBlocked && jump) {
+      this.jumpBlocks[blockWhy]++;
+      jump = false;
+    }
     // emergency: a downed horse right ahead that we are not jumping -> swerve
     let swerve = 0;
     if (!jump && nearestDown < jumpAt + 1 && !(sim.y[p] > 0)) swerve = px >= nearestDownX ? 1 : -1;

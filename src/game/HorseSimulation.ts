@@ -163,6 +163,9 @@ export class HorseSimulation {
   dashBlocked = false;
   /** post-jump acceleration boost remaining (s) */
   boostTime = 0;
+  /** consecutive pile clears (each within JUMP_CHAIN_WINDOW s of the last) scale the boost */
+  jumpChain = 0;
+  private lastClearTime = -99;
   /** the current jump has passed over a downed horse */
   private clearedThisJump = false;
   private wasAirborne = false;
@@ -1162,6 +1165,23 @@ export class HorseSimulation {
       chance: inLine ? DIRECTOR.LINE_CHANCE : DIRECTOR.CHANCE,
       downScale: DIRECTOR.DOWN_SCALE,
     });
+    if (!inLine) return;
+    // the horses just ahead of an in-line crash bolt sideways at the noise: the far side of
+    // the pile opens up, so jumping it is a real shortcut while the way round fills up
+    // (Phase 1c review P2-2)
+    const pileP = this.progress[best];
+    const half = DIRECTOR.SCATTER_HALF;
+    for (let k = first(pileP + DIRECTOR.SCATTER_AHEAD); k < o.length; k++) {
+      const i = o[k];
+      if (this.progress[i] <= pileP + 1) break;
+      if (i === p0 || this.state[i] !== HorseState.RUN) continue;
+      const dx = this.x[i] - px;
+      if (Math.abs(dx) >= half) continue;
+      const side = dx > 0.05 ? 1 : dx < -0.05 ? -1 : i & 1 ? 1 : -1;
+      const limit = this.course.width * 0.5 - 1;
+      this.laneTarget[i] = clampf(px + side * (half + 1 + (i % 7) * 0.4), -limit, limit);
+      this.vx[i] += side * 2.5;
+    }
   }
 
   /** Layers A/B: lane keeping; both perceive hazards ahead and AVOID (B coarser/less often). */
@@ -1344,7 +1364,11 @@ export class HorseSimulation {
     }
     let target = PLAYER.CRUISE_SPEED * (this.winded > 0 ? PLAYER.WINDED_FACTOR : 1);
     if (this.dashing && !this.dashBlocked) target = PLAYER.DASH_SPEED;
-    if (this.boostTime > 0) target += PLAYER.JUMP_BOOST;
+    // the landing boost carries you into the open space beyond the pile; it is not a battering
+    // ram (no bonus while an upright horse is right ahead in the lane)
+    if (this.boostTime > 0 && !this.uprightAhead(i, PLAYER.BOOST_CLEAR_AHEAD)) {
+      target += PLAYER.JUMP_BOOST * (1 + PLAYER.JUMP_CHAIN_BONUS * Math.min(this.jumpChain - 1, 2));
+    }
     // hard sideways steering at a gallop costs forward speed (swerving round a pile is not
     // free; a clean jump keeps the pace)
     target *= 1 - (PLAYER.STEER_DRAG * Math.abs(this.vx[i])) / PLAYER.LATERAL_MAX;
@@ -1393,6 +1417,8 @@ export class HorseSimulation {
       if (this.clearedThisJump && this.state[i] !== HorseState.FALL) {
         this.jumpsCleared++;
         this.dashGauge = Math.min(1, this.dashGauge + PLAYER.JUMP_CLEAR_GAUGE);
+        this.jumpChain = this.raceTime - this.lastClearTime < PLAYER.JUMP_CHAIN_WINDOW ? this.jumpChain + 1 : 1;
+        this.lastClearTime = this.raceTime;
         this.boostTime = PLAYER.JUMP_BOOST_TIME;
         this.winded = 0;
       }

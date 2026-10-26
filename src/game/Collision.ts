@@ -203,8 +203,13 @@ export function resolveCollisions(sim: HorseSimulation): void {
       if (q2 >= 1) continue;
 
       // vertical overlap: [y, y + height]
-      const topI = y[i] + (downI ? HORSE.FALLEN_HEIGHT : HORSE.HEIGHT);
-      const topJ = y[j] + (downJ ? HORSE.FALLEN_HEIGHT : HORSE.HEIGHT);
+      // (an airborne player leaps over a standing horse's back; the rider ducks)
+      // (horses jammed up round a pile, nearly standing, are hopped over like the pile itself)
+      const pAir = (i === FIELD.PLAYER || j === FIELD.PLAYER) && (y[i] > 0.05 || y[j] > 0.05);
+      const upHI = pAir ? (i !== FIELD.PLAYER && speed[i] < HORSE.JAM_SPEED ? HORSE.FALLEN_HEIGHT : HORSE.BACK_HEIGHT) : HORSE.HEIGHT;
+      const upHJ = pAir ? (j !== FIELD.PLAYER && speed[j] < HORSE.JAM_SPEED ? HORSE.FALLEN_HEIGHT : HORSE.BACK_HEIGHT) : HORSE.HEIGHT;
+      const topI = y[i] + (downI ? HORSE.FALLEN_HEIGHT : upHI);
+      const topJ = y[j] + (downJ ? HORSE.FALLEN_HEIGHT : upHJ);
       if (y[i] >= topJ || y[j] >= topI) continue;
 
       // a downed horse resting on top of another (pile) is supported, not pushed apart

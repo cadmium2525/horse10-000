@@ -151,23 +151,22 @@ export class CameraRig {
       ty = height + t.y * 0.35;
       ly = 1.2 + t.y * 0.3;
       if (this.mode === 'intro' && this.course) {
-        // establishing shot from above the infield (the oval and the whole field) easing
-        // down into the chase camera over the start sequence
-        // hold a high shot of the whole oval (infield, both turns, the 10,000-horse band on
-        // the back straight) for the first part, then swoop down behind the player
-        const u = Math.max(0, Math.min(1, (this.modeTime - this.introLength * 0.3) / (this.introLength * 0.6)));
+        // establishing shot high above the infield: the whole oval, the pond, both turns and
+        // the 10,000-horse band on the back straight (Phase 1c review P2-4); held for the
+        // first third, then a swoop down behind the player
+        const u = Math.max(0, Math.min(1, (this.modeTime - this.introLength * 0.35) / (this.introLength * 0.55)));
         const e = u * u * (3 - 2 * u);
         this.course.infieldCenter(this.centre);
         this.course.toWorld(0, t.cs + 150, this.tmpB);
-        // camera beyond the far side of the infield (below the clouds at 180 m+), looking
-        // across the oval at the field on the back straight
-        const sx = this.centre[0] * 1.9 - this.tmpB[0] * 0.9;
-        const sz = this.centre[1] * 1.9 - this.tmpB[1] * 0.9;
+        // slightly to the far side of the infield, steep look down over the middle of the oval
+        const sx = this.centre[0] * 1.25 - this.tmpB[0] * 0.25;
+        const sz = this.centre[1] * 1.25 - this.tmpB[1] * 0.25;
+        const high = this.camera.aspect < 1 ? 1250 : 720; // portrait needs more height to fit the oval
         tx = sx + (tx - sx) * e;
         tz = sz + (tz - sz) * e;
-        ty = 165 + (ty - 165) * e;
-        const fx = this.centre[0] * 0.2 + this.tmpB[0] * 0.8;
-        const fz = this.centre[1] * 0.2 + this.tmpB[1] * 0.8;
+        ty = high + (ty - high) * e;
+        const fx = this.centre[0] * 0.8 + this.tmpB[0] * 0.2;
+        const fz = this.centre[1] * 0.8 + this.tmpB[1] * 0.2;
         lx = fx + (lx - fx) * e;
         lz = fz + (lz - fz) * e;
         ly = ly * e;
@@ -190,6 +189,12 @@ export class CameraRig {
       this.look.y += (ly - this.look.y) * k(5);
     }
     this.camera.position.copy(this.pos);
+    // depth precision for the high intro shot (pond / ground z-fighting)
+    const near = Math.min(20, Math.max(0.3, (this.pos.y - 20) * 0.02));
+    if (Math.abs(near - this.camera.near) > 0.05) {
+      this.camera.near = near;
+      this.camera.updateProjectionMatrix();
+    }
     if (this.shakeAmp > 0.001) {
       this.shakeT += dt;
       const s = this.shakeAmp;

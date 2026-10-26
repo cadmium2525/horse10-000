@@ -346,8 +346,19 @@ void main(){
     const rng = this.rng;
     const parts: THREE.BufferGeometry[] = [];
     const p = [0, 0, 0];
+    // clouds ring the course but leave the air above the oval clear (the intro looks down
+    // on it from high above the infield)
+    const centre = [0, 0];
+    c.infieldCenter(centre);
     for (let k = 0; k < 34; k++) {
       c.toWorld(rng.range(-1600, 1600), rng.range(c.sMin - 400, c.sMax + 1600), p);
+      const dx = p[0] - centre[0];
+      const dz = p[1] - centre[1];
+      const d = Math.hypot(dx, dz);
+      if (d < 1000) {
+        p[0] = centre[0] + (dx / Math.max(1, d)) * (1000 + (d % 300));
+        p[1] = centre[1] + (dz / Math.max(1, d)) * (1000 + (d % 300));
+      }
       const y = rng.range(180, 320);
       const puffs = rng.int(3, 5);
       for (let j = 0; j < puffs; j++) {

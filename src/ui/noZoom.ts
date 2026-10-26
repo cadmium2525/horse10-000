@@ -15,12 +15,16 @@ export function installNoZoom(target: Document = document): void {
     },
     { passive: false },
   );
+  // (UI buttons are excluded: a fast second tap on e.g. "retry" must still click; they carry
+  // touch-action: manipulation, which already disables double-tap zoom on them)
   let lastEnd = 0;
   target.addEventListener(
     'touchend',
     (e) => {
       const now = performance.now();
-      if (now - lastEnd < 300) e.preventDefault();
+      const t = e.target as Element | null;
+      const onButton = !!t?.closest?.('button, .btn, a');
+      if (!onButton && now - lastEnd < 300) e.preventDefault();
       lastEnd = now;
     },
     { passive: false },

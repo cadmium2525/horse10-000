@@ -77,6 +77,10 @@ export const HORSE = {
   HALF_WIDTH: 0.45,
   HALF_LENGTH: 1.1,
   HEIGHT: 2.0,
+  /** back height: what an airborne player has to clear to leap over a standing horse */
+  BACK_HEIGHT: 1.5,
+  /** standing horses slower than this (jammed round a pile) are cleared like a downed one */
+  JAM_SPEED: 6,
   /** lying (fallen) collider */
   FALLEN_HALF_WIDTH: 0.95,
   FALLEN_HALF_LENGTH: 1.25,
@@ -121,18 +125,18 @@ export const HORSE = {
 } as const;
 
 export const PLAYER = {
-  CRUISE_SPEED: 26.5,
-  DASH_SPEED: 31.5,
+  CRUISE_SPEED: 22,
+  DASH_SPEED: 29,
   ACCEL: 9,
   /** acceleration while dashing (the burst must be felt within a 2 s gauge) */
   DASH_ACCEL: 14,
   LATERAL_MAX: 7.5,
   LATERAL_ACCEL: 30,
-  JUMP_VY: 8,
+  JUMP_VY: 10,
   JUMP_COOLDOWN: 0.35,
   DASH_DRAIN: 0.5, // gauge / s (full gauge = 2 s)
   /** slow natural refill: jumps, near misses and passes are the real fuel (review M4) */
-  DASH_REGEN: 0.16,
+  DASH_REGEN: 0.2,
   DASH_MIN_TO_START: 0.25,
   /** running the gauge dry: winded for this long at cruise × factor */
   WINDED_TIME: 1.0,
@@ -149,8 +153,13 @@ export const PLAYER = {
   /** forward-speed loss at full lateral speed (fraction) */
   STEER_DRAG: 0.06,
   /** clearing a downed horse / low pile gives a short burst */
-  JUMP_BOOST: 8,
-  JUMP_BOOST_TIME: 2.5,
+  JUMP_BOOST: 13,
+  JUMP_BOOST_TIME: 3,
+  /** clearing again within this many seconds chains: boost × (1 + bonus × (chain − 1)), max ×2 */
+  JUMP_CHAIN_WINDOW: 6,
+  JUMP_CHAIN_BONUS: 0.5,
+  /** the landing boost pauses while an upright horse is this close ahead in the lane */
+  BOOST_CLEAR_AHEAD: 5,
   /** share of the closing speed the player loses when hitting an NPC from behind */
   SHOULDER_LOSS: 0.25,
   /** lateral shove (m/s) given to an NPC the player runs into */
@@ -323,6 +332,10 @@ export const DIRECTOR = {
   /** in-line events: wider and sparser (low, jumpable piles) */
   LINE_RADIUS: 9,
   LINE_CHANCE: 0.3,
+  /** in-line events: horses up to SCATTER_AHEAD m beyond the pile within SCATTER_HALF m of the
+   *  player's line bolt sideways (the far side of a jumpable pile opens up) */
+  SCATTER_AHEAD: 30,
+  SCATTER_HALF: 4,
   /** share of events placed across the player's own line */
   IN_LINE: 0.6,
 } as const;

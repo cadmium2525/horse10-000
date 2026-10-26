@@ -117,6 +117,13 @@ export class World {
     const pp = this.horses.playerPose;
     this.rig.reduceMotion = this.reduceMotion;
     this.rig.update(pp, dt);
+    // the high establishing shot sees the whole oval: push the fog out with camera height
+    const fog = this.scene.fog as THREE.Fog | null;
+    if (fog) {
+      const hgt = Math.max(0, this.rig.camera.position.y - 60);
+      fog.near = 160 + hgt * 1.2;
+      fog.far = 1350 + hgt * 1.6;
+    }
     this.env.follow(this.rig.camera);
     this.horses.update(alpha, this.rig.camera);
     this.hazards.update(dt, this.reduceMotion);
