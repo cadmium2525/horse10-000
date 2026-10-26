@@ -1,0 +1,121 @@
+/**
+ * Share actions for the result card (design §6). Static site, no server: the PNG is made on
+ * the device; X gets text + URL via Web Intent (an image cannot be attached that way), the OS
+ * share sheet gets the file where the browser supports it.
+ *
+ * Popup blockers / iOS require window.open and navigator.share to run inside the tap
+ * handler, so callers pre-render the PNG blobs before the buttons are shown.
+ */
+import { xIntentUrl } from './CardText';
+
+export function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png');
+  });
+}
+
+export function isIOS(): boolean {
+  const ua = navigator.userAgent;
+  // iPadOS reports a Mac UA but has touch
+  return /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}
+
+export function canShareFiles(file?: File): boolean {
+  try {
+    const probe = file ?? new File([new Blob(['x'], { type: 'image/png' })], 'probe.png', { type: 'image/png' });
+    return typeof navigator.share === 'function' && typeof navigator.canShare === 'function' && navigator.canShare({ files: [probe] });
+  } catch {
+    return false;
+  }
+}
+
+export type SaveOutcome = 'downloaded' | 'share-sheet' | 'opened' | 'failed';
+
+/**
+ * Save the PNG. Desktop / Android: <a download>. iOS Safari ignores download for blobs in a
+ * useful way, so there the share sheet ("画像を保存") is used, or failing that the image is
+ * opened in a new tab for long-press saving.
+ */
+export async function saveImage(blob: Blob, fileName: string): Promise<SaveOutcome> {
+  if (isIOS()) {
+    const file = new File([blob], fileName, { type: 'image/png' });
+    if (canShareFiles(file)) {
+      try {
+        await navigator.share({ files: [file] });
+        return 'share-sheet';
+      } catch (e) {
+        if ((e as DOMException)?.name === 'AbortError') return 'share-sheet';
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return win ? 'opened' : 'failed';
+  }
+  try {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    return 'downloaded';
+  } catch {
+    return 'failed';
+  }
+}
+
+export type ShareOutcome = 'shared' | 'cancelled' | 'unsupported' | 'failed';
+
+/** OS share sheet with the image file, the post text and the play URL */
+export async function shareImage(blob: Blob, fileName: string, text: string, url: string): Promise<ShareOutcome> {
+  const file = new File([blob], fileName, { type: 'image/png' });
+  if (!canShareFiles(file)) return 'unsupported';
+  try {
+    await navigator.share({ files: [file], text, url });
+    return 'shared';
+  } catch (e) {
+    return (e as DOMException)?.name === 'AbortError' ? 'cancelled' : 'failed';
+  }
+}
+
+/** X Web Intent in a new tab (text + URL pre-filled; the user attaches the saved image) */
+export function openXIntent(text: string, url: string): boolean {
+  const win = window.open(xIntentUrl(text, url), '_blank', 'noopener');
+  if (!win) {
+    // popup blocked: navigate this tab instead
+    location.href = xIntentUrl(text, url);
+  }
+  return true;
+}
+
+/** clipboard with an execCommand fallback (older iOS / insecure contexts) */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall through
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    ta.style.fontSize = '16px'; // no iOS focus zoom
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}

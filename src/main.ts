@@ -12,12 +12,17 @@ import { installNoZoom } from './ui/noZoom';
  *   ?q=0..3       initial render LOD level
  *   ?ff=20        debug: fast-forward the race 20 s after it starts (implies start)
  *   ?start=1      skip the title screen
+ *   ?ogp=1        dev: render the fixed OGP card (scripts/gen-ogp.mjs captures it)
  */
 function boot(): void {
   installNoZoom();
   const params = new URLSearchParams(location.search);
   const app = document.getElementById('app');
   if (!app) throw new Error('#app missing');
+  if (params.get('ogp') === '1') {
+    void renderOgpPage(app);
+    return;
+  }
 
   const seed = parseSeed(params.get('seed')) ?? randomSeed();
   const pr = params.get('pr');
@@ -46,3 +51,13 @@ function boot(): void {
 }
 
 boot();
+
+/** dev route: the fixed OGP image on its own (captured by scripts/gen-ogp.mjs) */
+async function renderOgpPage(app: HTMLElement): Promise<void> {
+  const { renderOgp } = await import('./share/CardRenderer');
+  if (document.fonts?.ready) await document.fonts.ready;
+  const canvas = renderOgp();
+  canvas.style.width = '100%';
+  app.appendChild(canvas);
+  (window as unknown as { __ogpDataUrl?: string }).__ogpDataUrl = canvas.toDataURL('image/png');
+}

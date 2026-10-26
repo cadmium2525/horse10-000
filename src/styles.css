@@ -799,3 +799,193 @@ body:not(.touch) .btn-fullscreen {
   border-radius: 10px;
   padding: 8px 12px;
 }
+
+/* ---- result + share (Phase 3) ---- */
+.result-panel {
+  width: min(980px, calc(100vw - 24px - var(--safe-l) - var(--safe-r)));
+  max-width: none;
+  max-height: calc(100vh - 24px - var(--safe-t) - var(--safe-b));
+  max-height: calc(100dvh - 24px - var(--safe-t) - var(--safe-b));
+  padding: 14px 18px 12px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/* the panel scrolls on small screens (the rest of the UI blocks touch panning/zoom) */
+.result-panel,
+.result-panel * {
+  touch-action: pan-y;
+}
+.result-panel button {
+  touch-action: manipulation;
+}
+.result-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 12px;
+  margin-bottom: 10px;
+}
+.result-summary .result-badge {
+  font-size: 20px;
+  padding: 6px 14px;
+}
+.result-line {
+  font-weight: 800;
+  font-size: 16px;
+}
+.result-line .big {
+  font: 900 34px/1 var(--font);
+}
+.result-best {
+  font-size: 12px;
+  color: #59627a;
+  width: 100%;
+}
+.result-summary .result-hint {
+  width: 100%;
+  margin: 4px 0 0;
+}
+.result-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.result-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.card-tabs {
+  display: flex;
+  gap: 6px;
+}
+.tab {
+  font: 700 12px/1 var(--font);
+  color: var(--ink);
+  background: #e9eef6;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.tab.active {
+  background: var(--ink);
+  color: #fff;
+}
+.card-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  background: #cfe6f7;
+}
+.card-preview.portrait {
+  width: auto;
+  max-width: 100%;
+  max-height: min(56vh, 520px);
+}
+.result.rendering .card-preview {
+  opacity: 0.4;
+}
+.result-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
+}
+.share-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.share-main .btn {
+  width: 100%;
+}
+.btn-save {
+  font-size: 18px;
+}
+.btn-share {
+  background: #7bd389;
+}
+.btn-x {
+  background: #1d2433;
+  color: #fff;
+}
+.share-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #59627a;
+}
+.share-sub {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.btn-small {
+  font-size: 13px;
+  padding: 8px 14px;
+  box-shadow: 0 3px 0 var(--ink);
+}
+.result-status {
+  min-height: 1.2em;
+  font-size: 13px;
+  font-weight: 800;
+  color: #1d6fd1;
+}
+.result-actions .result-buttons {
+  gap: 8px;
+}
+.result-actions .result-buttons .btn {
+  font-size: 14px;
+  padding: 10px 14px;
+}
+.btn-retry {
+  background: var(--gold);
+}
+.result-actions .result-note {
+  margin-top: 0;
+}
+/* narrow / portrait: stack the card above the actions */
+@media (max-width: 720px), (orientation: portrait) {
+  .result-layout {
+    grid-template-columns: 1fr;
+  }
+  .card-preview.portrait {
+    max-height: 46vh;
+  }
+}
+/* phone landscape: short screen, keep the save button in the first view */
+@media (max-height: 500px) and (orientation: landscape) {
+  .result-panel {
+    padding: 8px 12px;
+  }
+  .result-summary {
+    margin-bottom: 6px;
+  }
+  .result-line .big {
+    font-size: 26px;
+  }
+  .result-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px;
+  }
+  .share-main {
+    gap: 6px;
+  }
+  .share-main .btn {
+    padding: 9px 14px;
+  }
+  .card-preview.portrait {
+    max-height: 60vh;
+  }
+}
+
+/* the fullscreen chip would sit on top of the share buttons */
+body.in-result .btn-fullscreen {
+  display: none;
+}

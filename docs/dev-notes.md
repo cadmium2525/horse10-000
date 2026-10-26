@@ -48,3 +48,9 @@ Safari（縦・横）と「ホーム画面に追加」した起動の両方で�
 - **低電力モード**: `?debug=1` の `refresh` が 33ms と推定され、Q（画質）が下がり続けないこと。30Hz の sim が実時間で進むこと。
 - **発熱/長時間**: 5 レース連続で FPS が大きく落ちないこと。
 - **入力欄なし**: フォーカスで自動ズームする input が存在しないこと（現状なし）。
+
+## リザルト・共有（Phase 3）
+- カード: `src/share/CardRenderer.ts`（2D Canvas、1200×630 / 1080×1350、システムフォント、`document.fonts.ready` 待ち）。表示する文字はすべて `src/share/CardText.ts` の純関数 `cardModel(result)` から作る（`tests/Share.test.ts` でゲーム結果と一致を検証）。
+- 共有: `src/share/Share.ts`。保存 = `<a download>`（iOS は共有シート →「画像を保存」、不可なら新規タブで画像を開いて長押し保存）。画像共有 = `navigator.canShare({files})` → `navigator.share({files,text,url})`（非対応時は保存＋投稿文コピー）。X = Web Intent（テキスト＋URL。画像は自動添付できないので「保存画像を添付」と案内）。
+- PNG はリザルト表示時に先に作っておき、ボタンのタップ内で同期的に `window.open` / `share` を呼ぶ（ポップアップブロック・iOS 対策）。
+- 固定 OGP: `public/assets/ogp.png`（1200×630）。作り直す場合は `npm run build && npx vite preview --port 4317` を起動して `NODE_PATH=<playwright の node_modules> node scripts/gen-ogp.mjs`（`?ogp=1` で描いたカードを保存）。OGP / Twitter カードのメタタグは index.html（絶対 URL）。
