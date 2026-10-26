@@ -28,7 +28,25 @@ body {
   -webkit-user-select: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: none;
   overscroll-behavior: none;
+}
+
+/* no page zoom anywhere (iOS ignores user-scalable=no; see ui/noZoom.ts for the JS guard) */
+canvas,
+.ui,
+.ui * {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.ui button,
+.btn {
+  touch-action: manipulation;
 }
 
 #app {

@@ -277,8 +277,23 @@ export class HorseSimulation {
     const rng = new Rng(deriveSeed(this.seed, 'field'));
     const perRow = Math.floor((FIELD.GRID_HALF_WIDTH * 2) / FIELD.GRID_LATERAL_SPACING) + 1;
     const npc = this.n - 1;
-    // walk grid slots row by row; behind the first rows, slots inside the "streak" corridors
-    // stay empty (design: 中団に隙間の筋 — readable lines a skilled player can run through)
+    // walk grid slots row by row; behind the first rows a seeded low-frequency density field
+    // leaves irregular sparse patches (natural-looking gaps, no aligned lanes): a sum of a
+    // few plane waves at oblique angles, a slot stays empty where it peaks
+    const gr = new Rng(deriveSeed(this.seed, 'gaps'));
+    const waves: number[] = [];
+    for (let k = 0; k < 4; k++) {
+      // oblique directions only (20°–70° off the course axis, either side)
+      const ang = gr.range(0.35, 1.22) * (gr.next() < 0.5 ? 1 : -1);
+      const len = gr.range(FIELD.GAP_WAVE_MIN, FIELD.GAP_WAVE_MAX);
+      const kk = (Math.PI * 2) / len;
+      waves.push(Math.sin(ang) * kk, Math.cos(ang) * kk, gr.range(0, Math.PI * 2));
+    }
+    const density = (x: number, p: number): number => {
+      let v = 0;
+      for (let k = 0; k < waves.length; k += 3) v += Math.sin(waves[k] * x + waves[k + 1] * p + waves[k + 2]);
+      return v;
+    };
     const xs: number[] = [];
     const rowsOf: number[] = [];
     for (let row = 0; xs.length < npc; row++) {
@@ -286,7 +301,7 @@ export class HorseSimulation {
       for (let col = 0; col < perRow && xs.length < npc; col++) {
         let x = -FIELD.GRID_HALF_WIDTH + col * FIELD.GRID_LATERAL_SPACING + stagger;
         if (x > FIELD.GRID_HALF_WIDTH) x -= FIELD.GRID_LATERAL_SPACING;
-        if (row >= FIELD.CORRIDOR_FROM_ROW && inCorridor(x)) continue;
+        if (row >= FIELD.GAP_FROM_ROW && density(x, -row * FIELD.GRID_ROW_SPACING) > FIELD.GAP_THRESHOLD) continue;
         xs.push(x);
         rowsOf.push(row);
       }
@@ -627,8 +642,6 @@ export class HorseSimulation {
         const side = s === 0 ? pref : -pref;
         const nx = x + side * step * k;
         if (nx < -half || nx > half) continue;
-        // lane changes keep the streak corridors open
-        if (this.corridorOpen(nx, p)) continue;
         if (wide ? this.slotFree(nx, p, i, 1.2, 2.4) : this.slotFree(nx, p, i)) {
           this.laneTarget[i] = nx;
           return true;
@@ -666,7 +679,7 @@ export class HorseSimulation {
           // (a horse stuck behind a pile for a while scrambles over it — comedic, and it
           // keeps the queue moving)
           const dp = this.progress[lead] - this.progress[i];
-          if (dp > 2.2 && dp < 5.5) {
+          if (dp > 1.8 && dp < 5.5) {
             this.eventCooldown[i] = COLLISION.EVENT_COOLDOWN;
             // (the longer it has been stuck, the more determined the scramble)
             const urge = 1 + 2.5 * Math.max(0, this.queueTime[i] - LOD.CLIMB_AFTER);
@@ -1020,8 +1033,12 @@ export class HorseSimulation {
     }
     // stuck behind a slower horse: change lane by one body width if (and only if) there is room
     if (this.blocked[i] && Math.abs(this.laneTarget[i] - x) < 0.2) {
-      const pref = left < right ? -1 : right < left ? 1 : i & 1 ? 1 : -1;
-      this.tryLaneChange(i, pref);
+      let pref = left < right ? -1 : right < left ? 1 : i & 1 ? 1 : -1;
+      // crawling in a queue: look two widths out as well (no long standstills, R1); boxed in
+      // on the packed rail the way out is outwards
+      const crawling = this.speed[i] < 3;
+      if (crawling && x < -this.course.width * 0.5 + 10) pref = 1;
+      this.tryLaneChange(i, pref, crawling);
     }
     this.desiredVx[i] = clampf((this.laneTarget[i] - x) * 1.2, -1.0, 1.0);
 
@@ -1107,8 +1124,8 @@ export class HorseSimulation {
     }
     // most events block the player's own line (jump it or go round), the rest hit the
     // densest spot nearby (spectacle, and piles that change the traffic)
-    // the first event never lands on an open streak corridor: the escape routes out of the
-    // back of the field must work from the start (Phase 1b review M4)
+    // the first event is never placed across the player's own line: the way out of the back
+    // of the field must work from the start (Phase 1b review M4)
     const firstEvent = this.directorEvents === 0;
     const inLine = this.rng.next() < DIRECTOR.IN_LINE && !firstEvent;
     let best = -1;
@@ -1119,7 +1136,7 @@ export class HorseSimulation {
       if (i === p0 || this.state[i] !== HorseState.RUN || this.inPlayerSafeBox(i)) continue;
       const dx = Math.abs(this.x[i] - px);
       if (dx > (inLine ? 5 : DIRECTOR.SIDE)) continue;
-      if (firstEvent && corridorDistance(this.x[i]) < 4.5) continue;
+      if (firstEvent && dx < 8) continue;
       const score = inLine
         ? -dx + this.rng.next()
         : this.densityAt(this.x[i], this.progress[i]) - dx * 0.4 + this.rng.next() * 3;
@@ -1208,7 +1225,7 @@ export class HorseSimulation {
     const p = this.progress[i];
     const nx = x - LOD.DRIFT_STEP;
     const rail = -this.course.width * 0.5;
-    if (x > rail + LOD.DRIFT_REACH || nx < rail + 0.9 || this.corridorOpen(nx, p)) return;
+    if (x > rail + LOD.DRIFT_REACH || nx < rail + 0.9) return;
     // the pull fades out towards the edge of its reach (no sharp empty band there)
     const fade = (rail + LOD.DRIFT_REACH - x) / LOD.DRIFT_FADE;
     if (fade < 1 && this.rng.next() > fade) return;
@@ -1242,13 +1259,6 @@ export class HorseSimulation {
   nearTurn(p: number, before: number): boolean {
     const c = this.course;
     return c.curvatureAt(p) > 0 || c.curvatureAt(p + before * 0.5) > 0 || c.curvatureAt(p + before) > 0;
-  }
-
-  /** x lies in a streak corridor that is open at progress p (inner ones close at turns) */
-  corridorOpen(x: number, p: number): boolean {
-    if (!inCorridor(x)) return false;
-    if (x > -this.course.width * 0.5 + FIELD.CORRIDOR_INNER_CLOSE) return true;
-    return !this.nearTurn(p, FIELD.CORRIDOR_CLOSE_BEFORE);
   }
 
   private railFactor(x: number, p: number): number {
@@ -1446,15 +1456,10 @@ export class HorseSimulation {
       if (sp < 0) sp = 0;
       this.speed[i] = sp;
 
-      // lateral. Upright NPCs drift out of the open "streak" corridors (they keep them open)
+      // lateral
       const latAcc = isPlayer ? PLAYER.LATERAL_ACCEL : HORSE.LATERAL_ACCEL;
       let vx = this.vx[i];
-      let want = this.desiredVx[i];
-      if (!isPlayer && (st === HorseState.RUN || st === HorseState.AVOID) && this.corridorOpen(this.x[i], this.progress[i])) {
-        const edge = corridorExit(this.x[i]);
-        want = edge > this.x[i] ? FIELD.CORRIDOR_EXIT_SPEED : -FIELD.CORRIDOR_EXIT_SPEED;
-        if (Math.abs(this.laneTarget[i] - this.x[i]) < 3) this.laneTarget[i] = edge;
-      }
+      const want = this.desiredVx[i];
       const dvx = want - vx;
       const maxDv = latAcc * dt;
       vx += dvx > maxDv ? maxDv : dvx < -maxDv ? -maxDv : dvx;
@@ -1508,28 +1513,6 @@ export class HorseSimulation {
       }
     }
   }
-}
-
-/** true if lateral position x lies in one of the open "streak" corridors */
-export function inCorridor(x: number): boolean {
-  const sp = FIELD.CORRIDOR_SPACING;
-  const m = (((x - FIELD.CORRIDOR_OFFSET) % sp) + sp) % sp;
-  return m < FIELD.CORRIDOR_HALF || m > sp - FIELD.CORRIDOR_HALF;
-}
-
-/** nearest x just outside the corridor containing x */
-/** lateral distance from x to the nearest corridor centre line */
-export function corridorDistance(x: number): number {
-  const sp = FIELD.CORRIDOR_SPACING;
-  const c = Math.round((x - FIELD.CORRIDOR_OFFSET) / sp) * sp + FIELD.CORRIDOR_OFFSET;
-  return Math.abs(x - c);
-}
-
-export function corridorExit(x: number): number {
-  const sp = FIELD.CORRIDOR_SPACING;
-  const c = Math.round((x - FIELD.CORRIDOR_OFFSET) / sp) * sp + FIELD.CORRIDOR_OFFSET;
-  const h = FIELD.CORRIDOR_HALF + 0.05;
-  return x >= c ? c + h : c - h;
 }
 
 function clampf(v: number, lo: number, hi: number): number {

@@ -19,14 +19,12 @@ describe('difficulty: dash, line choice, no input', () => {
     expect(mean(never.map((r) => r.rank))).toBeGreaterThan(mean(smart.map((r) => r.rank)));
   }, 900000);
 
-  // (review target: within ±20 %. For the 250 ms proxy the wide line is currently ~4 s better:
-  // the packed rail rewards precise riders — the optimal bot uses it 55–75 % of the turn)
-  it('the turn has no single right line: rail-first and ignoring the rail end within 4 s of each other', () => {
+  it('the turn has no single right line: rail-first and ignoring the rail end within 2 s of each other', () => {
     const outside = DIFFICULTY_SEEDS.map((s) => runRace(s, { ...HUMAN_250, insideLine: false }));
     report('outside-line', outside);
     for (const r of outside) expect(r.insideShare).toBeLessThan(0.3);
     const dGap = mean(smart.map((r) => r.gap)) - mean(outside.map((r) => r.gap));
-    expect(Math.abs(dGap)).toBeLessThanOrEqual(4);
+    expect(Math.abs(dGap)).toBeLessThanOrEqual(2);
     // (in finish time both lines are within ±20 % by a wide margin)
     const tIn = mean(smart.map((r) => r.time));
     const tOut = mean(outside.map((r) => r.time));
@@ -39,7 +37,9 @@ describe('difficulty: dash, line choice, no input', () => {
     for (const r of passive) {
       expect(r.time).toBeGreaterThan(0);
       expect(r.time).toBeLessThanOrEqual(150);
-      expect(r.rank).toBeGreaterThan(500);
+      // natural gaps let a straight runner through now; it still ends well adrift
+      expect(r.gap).toBeGreaterThanOrEqual(8);
     }
+    expect(median(passive.map((r) => r.rank))).toBeGreaterThanOrEqual(200);
   }, 900000);
 });

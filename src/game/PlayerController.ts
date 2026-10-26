@@ -120,13 +120,10 @@ export class AutoBot {
       let best = this.laneTarget;
       let bestScore = -Infinity;
       let currentScore = -Infinity;
-      // local lanes around us plus the centre of every open corridor (planning ahead)
+      // local lanes around us
       const cands = this.candidates;
       cands.length = 0;
       for (let off = -28; off <= 28; off += 1) cands.push(px + off);
-      for (let c = FIELD.CORRIDOR_OFFSET - FIELD.CORRIDOR_SPACING * 6; c < halfW; c += FIELD.CORRIDOR_SPACING) {
-        if (c > -halfW) cands.push(c);
-      }
       for (const cx of cands) {
         const lx = Math.max(-halfW, Math.min(halfW, cx));
         const off = lx - px;

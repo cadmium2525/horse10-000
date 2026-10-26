@@ -1,6 +1,7 @@
 import './styles.css';
 import { Game } from './game/Game';
 import { parseSeed, randomSeed } from './data/Seed';
+import { installNoZoom } from './ui/noZoom';
 
 /**
  * Entry point. URL parameters:
@@ -13,6 +14,7 @@ import { parseSeed, randomSeed } from './data/Seed';
  *   ?start=1      skip the title screen
  */
 function boot(): void {
+  installNoZoom();
   const params = new URLSearchParams(location.search);
   const app = document.getElementById('app');
   if (!app) throw new Error('#app missing');

@@ -55,7 +55,7 @@ export class ResultScreen {
         stat('自己ベスト', best ? `${formatInt(best.rank)}位${newBest ? '（更新！）' : ''}` : '-'),
       ]),
       ...(r.timedOut || r.rank > 1000
-        ? [h('p', { class: 'result-hint', text: 'ヒント：左右に動いて馬群の「すき間の筋」を抜けよう。倒れた馬はジャンプ、ダッシュは前が空いた所で！' })]
+        ? [h('p', { class: 'result-hint', text: 'ヒント：左右に動いて馬群のすき間を抜けよう。倒れた馬はジャンプ、ダッシュは前が空いた所で！' })]
         : []),
     );
     show(this.el, true);

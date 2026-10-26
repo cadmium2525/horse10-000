@@ -58,8 +58,8 @@ describe('horse pile model', () => {
     let fails = 0;
     for (let s = 1; s <= 8; s++) {
       const sim = startedSim(2, s);
-      // horse lying where the player comes down (~ 12 m ahead at ~19 m/s)
-      layDown(sim, 1, sim.x[0], sim.progress[0] + 13.5, 0);
+      // horse lying where the player comes down (airtime 2·JUMP_VY/g = 0.8 s at current speed)
+      layDown(sim, 1, sim.x[0], sim.progress[0] + sim.speed[0] * 0.8 + 1, 0);
       sim.grace[0] = 0;
       sim.step({ steer: 0, jump: true, dash: false });
       for (let t = 0; t < 40; t++) sim.step();

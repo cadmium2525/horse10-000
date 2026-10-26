@@ -159,14 +159,15 @@ export class CameraRig {
         const e = u * u * (3 - 2 * u);
         this.course.infieldCenter(this.centre);
         this.course.toWorld(0, t.cs + 150, this.tmpB);
-        // camera above the far side of the infield, looking across it at the field
-        const sx = this.centre[0] * 1.45 - this.tmpB[0] * 0.45;
-        const sz = this.centre[1] * 1.45 - this.tmpB[1] * 0.45;
+        // camera beyond the far side of the infield (below the clouds at 180 m+), looking
+        // across the oval at the field on the back straight
+        const sx = this.centre[0] * 1.9 - this.tmpB[0] * 0.9;
+        const sz = this.centre[1] * 1.9 - this.tmpB[1] * 0.9;
         tx = sx + (tx - sx) * e;
         tz = sz + (tz - sz) * e;
-        ty = 560 + (ty - 560) * e;
-        const fx = this.centre[0] * 0.35 + this.tmpB[0] * 0.65;
-        const fz = this.centre[1] * 0.35 + this.tmpB[1] * 0.65;
+        ty = 165 + (ty - 165) * e;
+        const fx = this.centre[0] * 0.2 + this.tmpB[0] * 0.8;
+        const fz = this.centre[1] * 0.2 + this.tmpB[1] * 0.8;
         lx = fx + (lx - fx) * e;
         lz = fz + (lz - fz) * e;
         ly = ly * e;

@@ -344,7 +344,10 @@ function upright(sim: HorseSimulation, i: number, j: number, rear: number, impac
     sim.eventCooldown[h] = COLLISION.EVENT_COOLDOWN;
     const pv = (v === 0 ? p : p * 0.4) * playerMult(sim, h);
     if (sim.state[h] === HorseState.STUMBLE) {
-      if (impact > 1 && sim.rng.next() < COLLISION.STUMBLE_TO_FALL * playerMult(sim, h) * sim.accidentScale()) sim.fall(h, 0, 0);
+      // (a NEW fall never starts inside the player's reaction window: design §4 fairness)
+      if (impact > 1 && sim.rng.next() < COLLISION.STUMBLE_TO_FALL * playerMult(sim, h) * sim.accidentScale()) {
+        if (h === FIELD.PLAYER || !sim.inPlayerSafeBox(h)) sim.fall(h, 0, 0);
+      }
     } else if (sim.rng.next() < pv) {
       sim.stumble(h);
     }

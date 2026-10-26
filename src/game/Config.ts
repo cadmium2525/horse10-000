@@ -53,26 +53,19 @@ export const FIELD = {
   GRID_LATERAL_SPACING: 1.8,
   GRID_ROW_SPACING: 2.0,
   GRID_HALF_WIDTH: 70,
-  GRID_JITTER: 0,
+  GRID_JITTER: 0.25,
   GRID_PROGRESS_JITTER: 0.15,
   /**
-   * "streaks": empty lateral corridors through the mid/rear field (every CORRIDOR_SPACING m,
-   * CORRIDOR_HALF m half-width, centred CORRIDOR_OFFSET m off the centre line so the player
-   * does not start in one). NPC lane changes avoid them; a skilled player rides them.
+   * natural gaps instead of laid-out corridors (Phase 1b user feedback): the grid density is
+   * modulated by seeded low-frequency noise (a few plane waves at oblique angles, wavelengths
+   * GAP_WAVE_MIN–MAX m). Slots where it exceeds GAP_THRESHOLD stay empty, giving irregular
+   * sparse patches that drift apart and close as horses with different speeds mix — never a
+   * straight aligned lane.
    */
-  CORRIDOR_SPACING: 16,
-  CORRIDOR_HALF: 1.2,
-  CORRIDOR_OFFSET: 8,
-  CORRIDOR_FROM_ROW: 6,
-  /**
-   * corridors whose centre lies within this many metres of the inside rail close on a turn
-   * and CORRIDOR_CLOSE_BEFORE m before it: the field packs the rail there (inside = short but
-   * jammed, outside corridors stay open = long but free)
-   */
-  CORRIDOR_INNER_CLOSE: 150,
-  CORRIDOR_CLOSE_BEFORE: 120,
-  /** lateral speed (m/s) at which upright NPCs leave a corridor */
-  CORRIDOR_EXIT_SPEED: 1.2,
+  GAP_FROM_ROW: 4,
+  GAP_THRESHOLD: 0.8,
+  GAP_WAVE_MIN: 10,
+  GAP_WAVE_MAX: 32,
   /** player starts this far behind the last row */
   PLAYER_BEHIND_LAST_ROW: 3.5,
   /** seconds before the gates open */
@@ -97,7 +90,7 @@ export const HORSE = {
   NPC_SPEED_MAX: 15.55,
   /** share of base speed decided by start row: front rows are faster, so the field fans
    *  out instead of locking into a solid block, and difficulty rises towards the front */
-  FRONT_BIAS: 0.75,
+  FRONT_BIAS: 0.6,
   PACE_AMPLITUDE: 0.03,
   /** NPC stamina: pace drops linearly by up to FADE over the last FADE_DIST m */
   FADE: 0.18,
@@ -130,7 +123,7 @@ export const HORSE = {
 export const PLAYER = {
   CRUISE_SPEED: 26.5,
   DASH_SPEED: 31.5,
-  ACCEL: 7,
+  ACCEL: 9,
   /** acceleration while dashing (the burst must be felt within a 2 s gauge) */
   DASH_ACCEL: 14,
   LATERAL_MAX: 7.5,
@@ -165,7 +158,7 @@ export const PLAYER = {
   /** contacts softer than this (m/s) never unsettle the player (side brushes in a crowd) */
   SOFT_BUMP: 1.8,
   /** probability multiplier on accidental stumbles (player-friendly) */
-  STUMBLE_MULT: 0.8,
+  STUMBLE_MULT: 0.72,
 } as const;
 
 /**
