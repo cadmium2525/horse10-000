@@ -39,6 +39,10 @@ export interface BotOptions {
   dash?: 'smart' | 'hold' | 'never';
   /** false = never jump (to measure what jumping is worth) */
   jump?: boolean;
+  /** test proxy: press jump on every tick (a button masher leapfrogging the field) */
+  mash?: boolean;
+  /** test proxy: no steering and no dash at all (combine with mash for "does nothing but jump") */
+  passive?: boolean;
   /** prefer the inside rail on the turn (shorter way round) */
   insideLine?: boolean;
   seed?: number;
@@ -62,6 +66,8 @@ export class AutoBot {
   private readonly noise: number;
   private readonly dashMode: 'smart' | 'hold' | 'never';
   private readonly canJump: boolean;
+  private readonly mash: boolean;
+  private readonly passive: boolean;
   private readonly insideLine: boolean;
   private readonly queue: PlayerIntent[] = [];
   private readonly candidates: number[] = [];
@@ -82,12 +88,15 @@ export class AutoBot {
     this.noise = o.noise ?? 0;
     this.dashMode = o.dash ?? 'smart';
     this.canJump = o.jump ?? true;
+    this.mash = o.mash ?? false;
+    this.passive = o.passive ?? false;
     this.insideLine = o.insideLine ?? true;
     this.noisePhase = ((o.seed ?? 1) * 2654435761) % 1000;
   }
 
   decide(sim: HorseSimulation): PlayerIntent {
-    const now = this.think(sim);
+    const now = this.passive ? { steer: 0, jump: false, dash: false } : this.think(sim);
+    if (this.mash) now.jump = true;
     if (this.delayTicks <= 0) return now;
     this.queue.push(now);
     // until the first delayed intent arrives the "human" is still reacting: no input
@@ -100,6 +109,8 @@ export class AutoBot {
     const pp = sim.progress[p];
     const halfW = sim.course.width / 2 - 2;
     const look = 12 + 30 * this.skill;
+    // a jump costs gauge: without it a pile is just an obstacle
+    const canJump = this.canJump && sim.dashGauge >= PLAYER.JUMP_COST;
     const found = sim.hash.query(px - 29.5, pp - 1, px + 29.5, pp + look);
     const res = sim.hash.result;
     const mySpeed = Math.max(sim.speed[p], 12);
@@ -148,7 +159,7 @@ export class AutoBot {
           const st = sim.state[j];
           if (st === HorseState.FALL) {
             const top = sim.groundY[j] + 0.75;
-            if (top < 1.2 && this.canJump) continue; // jumpable
+            if (top < 1.2 && canJump) continue; // jumpable
           } else if (st !== HorseState.RECOVER && st !== HorseState.STUMBLE && sim.speed[j] > mySpeed - 1.5) {
             continue; // moving as fast as us: not an obstacle
           }
@@ -189,7 +200,7 @@ export class AutoBot {
         const top = sim.groundY[j] + sim.y[j] - sim.groundY[j] + 0.75;
         // jump when the arc passes over it (above its top, before landing); the take-off
         // point follows from the arc, no fixed distance
-        if (this.canJump && top <= HORSE.JUMPABLE_TOP) {
+        if (canJump && top <= HORSE.JUMPABLE_TOP) {
           const tD = Math.max(0, d - lead - 1.0) / Math.max(1, mySpeed - sim.speed[j]);
           const yD = PLAYER.JUMP_VY * tD - 0.5 * HORSE.GRAVITY * tD * tD;
           if (tD > airtime * 0.2 && tD < airtime * 0.5 && yD > top + 0.15 && d > 2.5) jump = true;
@@ -223,7 +234,13 @@ export class AutoBot {
           const airtime = (2 * PLAYER.JUMP_VY) / HORSE.GRAVITY;
           const landRel = closing * airtime; // where it is relative to us when we land
           // (landing behind a standing horse is just a bump; flying into its back is not)
-          const clearH = sim.speed[j] < HORSE.JAM_SPEED ? HORSE.FALLEN_HEIGHT : HORSE.BACK_HEIGHT;
+          const clearH = sim.speed[j] < HORSE.JAM_SPEED ? HORSE.FALLEN_HEIGHT : HORSE.HEIGHT;
+          // coming down on a standing horse's back is a tumble: its position at our landing
+          const dLand = d + (sim.speed[j] - mySpeed) * airtime;
+          if (sim.speed[j] >= HORSE.JAM_SPEED && Math.abs(dLand) < 2.6) {
+            landingBlocked = true;
+            blockWhy = 'upright';
+          }
           // (only a horse we would hit head-on at take-off; a graze on the way up is a bump)
           if (yAt < clearH + 0.1 && tReach < airtime * 0.12 && sim.speed[j] < mySpeed - 12) {
             landingBlocked = true;

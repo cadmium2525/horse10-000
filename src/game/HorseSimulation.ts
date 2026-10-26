@@ -155,6 +155,8 @@ export class HorseSimulation {
   dashGauge = 1;
   dashing = false;
   jumpCooldown = 0;
+  /** no acceleration until this runs out (set by a landing that cleared nothing) */
+  landLock = 0;
   /** dash pressed last tick (a new dash needs a fresh press) */
   private dashHeldPrev = false;
   /** seconds of "out of breath" after running the gauge dry (cruise × WINDED_FACTOR) */
@@ -215,6 +217,8 @@ export class HorseSimulation {
     this.dashGauge = 1;
     this.jumpCooldown = 0.5;
     this.jumpCooldown = 0;
+    this.landLock = 0.5;
+    this.landLock = 0;
     this.winded = 0.5;
     this.winded = 0;
     this.boostTime = 0.5;
@@ -1355,6 +1359,7 @@ export class HorseSimulation {
     if (this.jumpCooldown > 0) this.jumpCooldown -= dt;
     if (this.winded > 0) this.winded -= dt;
     if (this.boostTime > 0) this.boostTime -= dt;
+    if (this.landLock > 0) this.landLock -= dt;
     const inControl = this.updateStateMachine(i);
     this.playerJumpBookkeeping(i);
 
@@ -1391,12 +1396,15 @@ export class HorseSimulation {
       target += PLAYER.JUMP_BOOST * (1 + PLAYER.JUMP_CHAIN_BONUS * Math.min(this.jumpChain - 1, 2));
     }
     if (target > PLAYER.MAX_SPEED) target = PLAYER.MAX_SPEED;
+    // no acceleration in the air or right after a flat landing: jumping has a price (M1)
+    if ((this.y[i] > 0.05 || this.landLock > 0) && target > this.speed[i]) target = this.speed[i];
     // hard sideways steering at a gallop costs forward speed (swerving round a pile is not
     // free; a clean jump keeps the pace)
     target *= 1 - (PLAYER.STEER_DRAG * Math.abs(this.vx[i])) / PLAYER.LATERAL_MAX;
     this.targetSpeed[i] = target;
     this.desiredVx[i] = clampf(intent.steer, -1, 1) * PLAYER.LATERAL_MAX;
-    if (intent.jump && this.y[i] <= 0 && this.jumpCooldown <= 0) {
+    if (intent.jump && this.y[i] <= 0 && this.jumpCooldown <= 0 && this.dashGauge >= PLAYER.JUMP_COST) {
+      this.dashGauge -= PLAYER.JUMP_COST;
       this.vy[i] = PLAYER.JUMP_VY;
       this.y[i] = 0.01;
       this.jumpCooldown = PLAYER.JUMP_COOLDOWN + (2 * PLAYER.JUMP_VY) / HORSE.GRAVITY;
@@ -1443,6 +1451,8 @@ export class HorseSimulation {
         this.lastClearTime = this.raceTime;
         this.boostTime = PLAYER.JUMP_BOOST_TIME;
         this.winded = 0;
+      } else if (this.state[i] !== HorseState.FALL) {
+        this.landLock = PLAYER.LANDING_LOCK;
       }
       this.clearedThisJump = false;
     }

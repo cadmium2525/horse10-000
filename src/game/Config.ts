@@ -77,10 +77,9 @@ export const HORSE = {
   HALF_WIDTH: 0.45,
   HALF_LENGTH: 1.1,
   HEIGHT: 2.0,
-  /** back height: what an airborne player has to clear to leap over a standing horse */
-  BACK_HEIGHT: 1.5,
-  /** standing horses slower than this (jammed round a pile) are cleared like a downed one */
-  JAM_SPEED: 6,
+  /** standing horses slower than this (jammed up against a pile, nearly stopped) are hopped
+   *  like a downed one; any other standing horse is a wall the jump cannot clear (M1) */
+  JAM_SPEED: 3,
   /** lying (fallen) collider */
   FALLEN_HALF_WIDTH: 0.95,
   FALLEN_HALF_LENGTH: 1.25,
@@ -89,9 +88,9 @@ export const HORSE = {
   PILE_STACK: 0.8,
   /** tallest pile (m): 3 layers */
   PILE_MAX: 1.8,
-  /** piles whose top is at most this high are cleared by a normal jump (peak ≈ 2.5 m): one or
-   *  two layers — yellow markers; three layers are red (go round) */
-  JUMPABLE_TOP: 1.9,
+  /** piles whose top is at most this high are cleared by a normal jump (peak ≈ 1.7 m): one or
+   *  two layers (0.75 / 1.35 m) — yellow markers; three layers are red (go round) */
+  JUMPABLE_TOP: 1.5,
 
   NPC_SPEED_MIN: 13.45,
   NPC_SPEED_MAX: 15.55,
@@ -137,7 +136,14 @@ export const PLAYER = {
   DASH_ACCEL: 14,
   LATERAL_MAX: 7.5,
   LATERAL_ACCEL: 30,
-  JUMP_VY: 10,
+  /** peak = vy²/2g ≈ 1.72 m: clears downed horses and 1–2 layer piles, never a standing horse (2 m) */
+  JUMP_VY: 8.3,
+  /** a jump costs this much dash gauge (no jump when the gauge is lower) */
+  JUMP_COST: 0.25,
+  /** after a landing that cleared nothing the horse cannot accelerate for this long (s) */
+  LANDING_LOCK: 0.3,
+  /** coming down on a standing horse's back = this chance of tumbling (comedic, no injury) */
+  UPRIGHT_LANDING_FAIL: 0.95,
   JUMP_COOLDOWN: 0.35,
   DASH_DRAIN: 0.5, // gauge / s (full gauge = 2 s)
   /** slow natural refill: jumps, near misses and passes are the real fuel (review M4) */

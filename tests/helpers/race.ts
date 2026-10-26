@@ -153,3 +153,8 @@ export function report(label: string, runs: RaceRun[]): void {
       .join(',')} | big ${runs.map((r) => r.bigFalls).join(',')} | first big ${runs.map((r) => r.firstBig.toFixed(1)).join(',')} | chances ${runs.map((r) => r.jumpChances).join(',')} | r30 ${runs.map((r) => r.rank30).join(',')} | gap ${runs.map((r) => r.gap.toFixed(1)).join(',')} | inside ${runs.map((r) => r.insideShare.toFixed(2)).join(',')} | innerDens ${runs.map((r) => r.innerDensity.toFixed(2)).join(',')} | dash ${runs.map((r) => r.dashShare.toFixed(2)).join(',')} | late vis/10s ${runs.map((r) => (r.visible.slice(4, -1).reduce((a, b) => a + b, 0) / Math.max(1, r.visible.length - 5)).toFixed(0)).join(',')}\n`,
   );
 }
+
+/** M1 proxies: jump pressed on every tick, alone or on top of a 250 ms human, and a
+ *  player who does nothing but jump */
+export const HUMAN_250_MASH: BotOptions = { ...HUMAN_250, mash: true };
+export const IDLE_MASH: BotOptions = { passive: true, mash: true };

@@ -203,11 +203,11 @@ export function resolveCollisions(sim: HorseSimulation): void {
       if (q2 >= 1) continue;
 
       // vertical overlap: [y, y + height]
-      // (an airborne player leaps over a standing horse's back; the rider ducks)
-      // (horses jammed up round a pile, nearly standing, are hopped over like the pile itself)
+      // (a standing horse is a wall the jump cannot clear — only horses jammed up against a
+      // pile, nearly stopped, are hopped over like the pile itself)
       const pAir = (i === FIELD.PLAYER || j === FIELD.PLAYER) && (y[i] > 0.05 || y[j] > 0.05);
-      const upHI = pAir ? (i !== FIELD.PLAYER && speed[i] < HORSE.JAM_SPEED ? HORSE.FALLEN_HEIGHT : HORSE.BACK_HEIGHT) : HORSE.HEIGHT;
-      const upHJ = pAir ? (j !== FIELD.PLAYER && speed[j] < HORSE.JAM_SPEED ? HORSE.FALLEN_HEIGHT : HORSE.BACK_HEIGHT) : HORSE.HEIGHT;
+      const upHI = pAir && i !== FIELD.PLAYER && speed[i] < HORSE.JAM_SPEED ? HORSE.FALLEN_HEIGHT : HORSE.HEIGHT;
+      const upHJ = pAir && j !== FIELD.PLAYER && speed[j] < HORSE.JAM_SPEED ? HORSE.FALLEN_HEIGHT : HORSE.HEIGHT;
       const topI = y[i] + (downI ? HORSE.FALLEN_HEIGHT : upHI);
       const topJ = y[j] + (downJ ? HORSE.FALLEN_HEIGHT : upHJ);
       if (y[i] >= topJ || y[j] >= topI) continue;
@@ -286,6 +286,14 @@ export function resolveCollisions(sim: HorseSimulation): void {
         const fallen = downI ? i : j;
         trip(sim, runner, fallen, impact + speed[runner] * 0.05);
       } else if (!downI && !downJ) {
+        const pl = i === FIELD.PLAYER ? i : j === FIELD.PLAYER ? j : -1;
+        if (pl >= 0 && y[pl] > 0.25 && sim.vy[pl] < 0) {
+          const o = pl === i ? j : i;
+          if (speed[o] >= HORSE.JAM_SPEED) {
+            landOnStanding(sim, pl, o);
+            continue;
+          }
+        }
         upright(sim, i, j, rear, impact, layer[i] === Layer.A || layer[j] === Layer.A);
       }
     }
@@ -327,6 +335,16 @@ function trip(sim: HorseSimulation, runner: number, fallen: number, impact: numb
     sim.tripFalls++;
   }
   else if (r < p + 0.3) sim.stumble(runner);
+}
+
+/** The player comes down on a standing horse's back: a comic tumble (M1). */
+function landOnStanding(sim: HorseSimulation, runner: number, other: number): void {
+  if (!sim.canBeKnocked(runner) || sim.eventCooldown[runner] > 0) return;
+  sim.eventCooldown[runner] = COLLISION.EVENT_COOLDOWN;
+  if (sim.rng.next() < PLAYER.UPRIGHT_LANDING_FAIL) {
+    sim.fall(runner, Math.sign(sim.x[runner] - sim.x[other]) || 1, 1);
+    sim.tripFalls++;
+  }
 }
 
 /** Contact between two upright horses. */

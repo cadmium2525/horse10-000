@@ -11,7 +11,7 @@ import { PauseMenu } from '../ui/PauseMenu';
 import { ResultScreen } from '../ui/Result';
 import { TitleScreen } from '../ui/Title';
 import { TouchControls } from '../ui/TouchControls';
-import { FIELD, RACE, SIM } from './Config';
+import { FIELD, PLAYER, RACE, SIM } from './Config';
 import { HorseSimulation, HorseState, Layer, STATE_NAMES } from './HorseSimulation';
 import { Input } from './Input';
 import { FixedStepper } from './Loop';
@@ -508,7 +508,7 @@ export class Game {
         leaderProgress: (this.leaderProgress - this.startProgress()) / total,
         dash: sim.dashGauge,
         dashing: sim.dashing,
-        jumpReady: sim.jumpCooldown <= 0 ? 1 : 0,
+        jumpReady: sim.jumpCooldown <= 0 && sim.dashGauge >= PLAYER.JUMP_COST ? 1 : 0,
         lastBurst: this.stats.lastBurst,
         burstSeq: this.stats.burstSeq,
         finalStretch: this.phase === 'racing' && L - sim.progress[p] < FINAL_STRETCH_M,
