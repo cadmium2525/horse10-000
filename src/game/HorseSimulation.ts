@@ -1396,8 +1396,8 @@ export class HorseSimulation {
       target += PLAYER.JUMP_BOOST * (1 + PLAYER.JUMP_CHAIN_BONUS * Math.min(this.jumpChain - 1, 2));
     }
     if (target > PLAYER.MAX_SPEED) target = PLAYER.MAX_SPEED;
-    // no acceleration in the air or right after a flat landing: jumping has a price (M1)
-    if ((this.y[i] > 0.05 || this.landLock > 0) && target > this.speed[i]) target = this.speed[i];
+    // no dash/boost acceleration in the air or right after a flat landing (back up to cruise only): jumping has a price (M1)
+    if (this.y[i] > 0.05 || this.landLock > 0) target = Math.min(target, Math.max(this.speed[i], PLAYER.CRUISE_SPEED));
     // hard sideways steering at a gallop costs forward speed (swerving round a pile is not
     // free; a clean jump keeps the pace)
     target *= 1 - (PLAYER.STEER_DRAG * Math.abs(this.vx[i])) / PLAYER.LATERAL_MAX;

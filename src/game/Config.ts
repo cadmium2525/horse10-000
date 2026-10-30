@@ -128,9 +128,9 @@ export const HORSE = {
 
 export const PLAYER = {
   CRUISE_SPEED: 21,
-  DASH_SPEED: 29,
+  DASH_SPEED: 30.5,
   /** hard ceiling on the player's target speed (dash + chained landing boosts) */
-  MAX_SPEED: 36,
+  MAX_SPEED: 37,
   ACCEL: 9,
   /** acceleration while dashing (the burst must be felt within a 2 s gauge) */
   DASH_ACCEL: 14,
@@ -140,32 +140,36 @@ export const PLAYER = {
   JUMP_VY: 8.3,
   /** a jump costs this much dash gauge (no jump when the gauge is lower) */
   JUMP_COST: 0.25,
+  /** autopilot only: it will not take off when a standing horse in the lane would be under it
+   *  on landing (within this many metres along / across) */
+  BOT_LAND_D: 2.2,
+  BOT_LAND_X: 1.0,
   /** after a landing that cleared nothing the horse cannot accelerate for this long (s) */
   LANDING_LOCK: 0.3,
   /** coming down on a standing horse's back = this chance of tumbling (comedic, no injury) */
   UPRIGHT_LANDING_FAIL: 0.95,
   JUMP_COOLDOWN: 0.35,
-  DASH_DRAIN: 0.5, // gauge / s (full gauge = 2 s)
+  DASH_DRAIN: 0.35, // gauge / s (full gauge ≈ 2.9 s)
   /** slow natural refill: jumps, near misses and passes are the real fuel (review M4) */
-  DASH_REGEN: 0.2,
+  DASH_REGEN: 0.35,
   DASH_MIN_TO_START: 0.25,
   /** running the gauge dry: winded for this long at cruise × factor */
-  WINDED_TIME: 1.0,
-  WINDED_FACTOR: 0.85,
+  WINDED_TIME: 2.0,
+  WINDED_FACTOR: 0.75,
   /** an upright horse this close ahead in the lane cancels the dash bonus (gauge still drains) */
   DASH_CLEAR_AHEAD: 3,
   /** accident multipliers while dashing (contact stumbles/trips, landing on a downed horse) */
   DASH_RISK: 1.7,
   DASH_LANDING_RISK: 1.3,
   /** gauge refills */
-  JUMP_CLEAR_GAUGE: 0.5,
-  NEAR_MISS_GAUGE: 0.05,
-  PASS_GAUGE: 0.0012,
+  JUMP_CLEAR_GAUGE: 1.0,
+  NEAR_MISS_GAUGE: 0.07,
+  PASS_GAUGE: 0.002,
   /** forward-speed loss at full lateral speed (fraction) */
   STEER_DRAG: 0.06,
   /** clearing a downed horse / low pile gives a short burst */
-  JUMP_BOOST: 13,
-  JUMP_BOOST_TIME: 3,
+  JUMP_BOOST: 16,
+  JUMP_BOOST_TIME: 5,
   /** clearing again within this many seconds chains: boost × (1 + bonus × (chain − 1)), max ×2 */
   JUMP_CHAIN_WINDOW: 6,
   JUMP_CHAIN_BONUS: 0.5,

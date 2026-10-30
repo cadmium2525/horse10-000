@@ -471,7 +471,8 @@ canvas,
 .hud-intro {
   position: absolute;
   left: 50%;
-  top: 18%;
+  /* bottom: the overhead start shot puts the 10,000-horse band in the upper/middle frame */
+  bottom: 7%;
   transform: translateX(-50%);
   text-align: center;
   white-space: nowrap;

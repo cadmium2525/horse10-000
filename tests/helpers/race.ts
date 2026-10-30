@@ -47,6 +47,8 @@ export interface RaceRun {
   innerDensity: number;
   /** share of racing time spent dashing */
   dashShare: number;
+  /** bot diagnostics: jump chances passed up (landing on a downed horse / tall pile / standing horse) */
+  blocks: string;
 }
 
 /** Full 10,000-horse race with a bot player (null = no input). Deterministic. */
@@ -122,6 +124,7 @@ export function runRace(seed: number, opts: BotOptions | null, maxSeconds: numbe
     gap: Math.max(0, myTime - winner),
     insideShare: turnTicks ? insideTicks / turnTicks : 0,
     innerDensity: innerSamples.length ? mean(innerSamples) : 0,
+    blocks: bot ? `${bot.jumpBlocks.down}/${bot.jumpBlocks.tall}/${bot.jumpBlocks.upright}` : '-',
     dashShare: raceTicks ? dashTicks / raceTicks : 0,
     seed,
     rank,

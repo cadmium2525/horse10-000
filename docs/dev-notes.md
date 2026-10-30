@@ -54,3 +54,12 @@ Safari（縦・横）と「ホーム画面に追加」した起動の両方で�
 - 共有: `src/share/Share.ts`。保存 = `<a download>`（iOS は共有シート →「画像を保存」、不可なら新規タブで画像を開いて長押し保存）。画像共有 = `navigator.canShare({files})` → `navigator.share({files,text,url})`（非対応時は保存＋投稿文コピー）。X = Web Intent（テキスト＋URL。画像は自動添付できないので「保存画像を添付」と案内）。
 - PNG はリザルト表示時に先に作っておき、ボタンのタップ内で同期的に `window.open` / `share` を呼ぶ（ポップアップブロック・iOS 対策）。
 - 固定 OGP: `public/assets/ogp.png`（1200×630）。作り直す場合は `npm run build && npx vite preview --port 4317` を起動して `NODE_PATH=<playwright の node_modules> node scripts/gen-ogp.mjs`（`?ogp=1` で描いたカードを保存）。OGP / Twitter カードのメタタグは index.html（絶対 URL）。
+
+## ジャンプのルール（Phase 2 レビュー M1：ジャンプ連打は最適戦略にしない）
+- 頂点は約 1.7m（`PLAYER.JUMP_VY` 8.3）。立っている馬（背 2.0m）は越えられない。越えられるのは倒れた馬・1〜2段の山（`HORSE.JUMPABLE_TOP` 1.5）と、山のそばで詰まって止まっている馬（`HORSE.JAM_SPEED` 3 m/s 未満）だけ。
+- 立っている馬の背に降りる＝転倒（`PLAYER.UPRIGHT_LANDING_FAIL`、コミカルに弾んで起き上がる）。
+- 1 回のジャンプでダッシュゲージ `JUMP_COST` 0.25 を消費。足りなければ跳べない。
+- 空中と、山を越えられなかった着地の直後（`LANDING_LOCK` 0.3 秒）はダッシュ・ブーストで加速しない（巡航速度までは戻る）。
+- 倒れた馬/山を越えて無事に着地すると、ゲージ全回復（`JUMP_CLEAR_GAUGE` 1.0）＋着地ブースト（`JUMP_BOOST` 16 m/s を `JUMP_BOOST_TIME` 5 秒、連続で最大 ×2、上限 `MAX_SPEED` 37）。ジャンプの価値はこの「事故の上を跳ぶ」ことにある。
+- テスト用ボット：`mash`（毎 tick ジャンプ入力）、`passive`（操舵・ダッシュなし）。`tests/DifficultyJump.test.ts` が連打が割に合わないことを固定する。ボットは着地点に立っている馬がいる跳躍を避け、ゲージを 1 回分残してダッシュする。
+- ダッシュ経済も同時に調整（ジャンプを弱くした分、通常プレイの手応えを戻すため）：`DASH_SPEED` 30.5、`DASH_DRAIN` 0.35、`DASH_REGEN` 0.35、`PASS_GAUGE` 0.002、`NEAR_MISS_GAUGE` 0.07。ゲージを空まで使い切った時の息切れは `WINDED_TIME` 2.0 秒 × `WINDED_FACTOR` 0.75（空いたコースでの「押しっぱなし」を割に合わなくする。tests/Balance の ideal solo 余裕 ≤16 秒を満たすため）。

@@ -237,7 +237,7 @@ export class AutoBot {
           const clearH = sim.speed[j] < HORSE.JAM_SPEED ? HORSE.FALLEN_HEIGHT : HORSE.HEIGHT;
           // coming down on a standing horse's back is a tumble: its position at our landing
           const dLand = d + (sim.speed[j] - mySpeed) * airtime;
-          if (sim.speed[j] >= HORSE.JAM_SPEED && Math.abs(dLand) < 2.6) {
+          if (sim.speed[j] >= HORSE.JAM_SPEED && Math.abs(dLand) < PLAYER.BOT_LAND_D && Math.abs(sim.x[j] - px) < PLAYER.BOT_LAND_X) {
             landingBlocked = true;
             blockWhy = 'upright';
           }
@@ -281,7 +281,9 @@ export class AutoBot {
     else if (this.dashMode === 'never') dash = false;
     else {
       // a full gauge is wasted regen: use it on any half-open lane
-      const want = (clear > (sim.dashGauge > 0.6 ? 4.5 : 7) && sim.dashGauge > 0.3) || (homeStraight && sim.dashGauge > 0.25);
+      // (a good player keeps one jump's worth of gauge in reserve: the next pile needs it)
+      const keep = this.canJump ? PLAYER.JUMP_COST : 0;
+      const want = (clear > (sim.dashGauge > 0.6 ? 4.5 : 7) && sim.dashGauge > 0.3 + keep) || (homeStraight && sim.dashGauge > 0.25);
       // keep holding while it pays, but let go before running dry (winded) — except for the
       // final sprint; a new dash needs a fresh press
       const finalSprint = sim.course.length - pp < 90;
@@ -292,8 +294,8 @@ export class AutoBot {
         this.heldTicks++;
         const started = sim.dashing || this.heldTicks <= this.delayTicks + 2;
         // (a human lets go early enough for their own reaction time)
-        const reserve = 0.06 + (PLAYER.DASH_DRAIN * this.delayTicks) / 30;
-        dash = started && (clear > 4 || homeStraight) && (sim.dashGauge > reserve || finalSprint);
+        const reserve = 0.06 + keep + (PLAYER.DASH_DRAIN * this.delayTicks) / 30;
+        dash = started && (clear > 4 || homeStraight) && (sim.dashGauge > (homeStraight ? 0.06 : reserve) || finalSprint);
       } else {
         dash = want && upToSpeed && !this.releasedLastTick;
         this.heldTicks = 0;
