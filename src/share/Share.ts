@@ -68,12 +68,16 @@ export async function saveImage(blob: Blob, fileName: string): Promise<SaveOutco
   }
 }
 
-/** OS share sheet with the image file, the post text and the play URL */
+/**
+ * OS share sheet with the image file and the post text. The play URL goes inside the text, not
+ * the separate `url` field: on iOS, apps such as X keep only `url` and drop `text` when both are
+ * passed, losing the message and hashtags.
+ */
 export async function shareImage(blob: Blob, fileName: string, text: string, url: string): Promise<ShareOutcome> {
   const file = new File([blob], fileName, { type: 'image/png' });
   if (!canShareFiles(file)) return 'unsupported';
   try {
-    await navigator.share({ files: [file], text, url });
+    await navigator.share({ files: [file], text: `${text}\n${url}` });
     return 'shared';
   } catch (e) {
     return (e as DOMException)?.name === 'AbortError' ? 'cancelled' : 'failed';
