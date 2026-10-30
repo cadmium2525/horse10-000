@@ -304,7 +304,7 @@ function drawTextPortrait(ctx: Ctx, m: CardModel, w: number, h: number): void {
   panel(ctx, 40, 40, w - 80, 230, 0.45);
   center(ctx, m.title, cx, 128, 76, '#ffffff', 900, INK, 9);
   center(ctx, m.tagline, cx, 214, 52, '#ffe48a', 900, INK, 7);
-  panel(ctx, 40, 330, w - 80, 560, 0.62);
+  panel(ctx, 40, 330, w - 80, 560, 0.78);
   if (m.badge) badge(ctx, m.badge, cx, 405, 50, col, 'center');
   let big = 250;
   while (big > 90 && measure(ctx, m.rank, big, 900) + measure(ctx, '位', 80, 900) + 8 > w - 160) big -= 6;
@@ -313,16 +313,16 @@ function drawTextPortrait(ctx: Ctx, m: CardModel, w: number, h: number): void {
   const left = cx - (bigW + unitW + 8) / 2;
   text(ctx, m.rank, left, 660, big, col.main, 900, INK, 14);
   text(ctx, '位', left + bigW + 8, 660, 80, col.main, 900, INK, 8);
-  center(ctx, `${m.field}頭`, cx, 735, 54, '#ffffff', 900, INK, 7);
-  center(ctx, m.overtakes, cx, 806, 50, '#ffffff', 900, INK, 7);
-  center(ctx, `${m.time}　${m.falls}`, cx, 862, 40, '#ffffff', 800, INK, 6);
+  center(ctx, `${m.field}頭`, cx, 735, 54, '#ffffff', 900, INK, 10);
+  center(ctx, m.overtakes, cx, 806, 50, '#ffffff', 900, INK, 10);
+  center(ctx, `${m.time}　${m.falls}`, cx, 862, 40, '#ffffff', 800, INK, 9);
   // footer band
-  panel(ctx, 0, h - 196, w, 196, 0.66);
-  center(ctx, `${m.date}　${m.seed}`, cx, h - 150, 30, '#dce9f5', 700, INK, 4);
+  panel(ctx, 0, h - 196, w, 196, 0.82);
+  center(ctx, `${m.date}　${m.seed}`, cx, h - 150, 30, '#ffffff', 700, INK, 6);
   center(ctx, m.cta, cx, h - 104, 38, '#ffd23f', 900, INK, 5);
   const urlSize = Math.min(32, fitSize(ctx, m.url, 32, w - 80, 700));
-  center(ctx, m.url, cx, h - 62, urlSize, '#ffffff', 700, INK, 4);
-  center(ctx, m.note, cx, h - 22, 24, '#dce9f5', 600, INK, 3);
+  center(ctx, m.url, cx, h - 62, urlSize, '#ffffff', 700, INK, 6);
+  center(ctx, m.note, cx, h - 22, 24, '#ffffff', 600, INK, 5);
 }
 
 function fitSize(ctx: Ctx, s: string, size: number, maxWidth: number, weight: number): number {

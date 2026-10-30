@@ -2,6 +2,7 @@ import './styles.css';
 import { Game } from './game/Game';
 import { parseSeed, randomSeed } from './data/Seed';
 import { installNoZoom } from './ui/noZoom';
+import { renderOgp } from './share/CardRenderer';
 
 /**
  * Entry point. URL parameters:
@@ -54,7 +55,6 @@ boot();
 
 /** dev route: the fixed OGP image on its own (captured by scripts/gen-ogp.mjs) */
 async function renderOgpPage(app: HTMLElement): Promise<void> {
-  const { renderOgp } = await import('./share/CardRenderer');
   if (document.fonts?.ready) await document.fonts.ready;
   const canvas = renderOgp();
   canvas.style.width = '100%';

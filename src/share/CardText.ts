@@ -69,7 +69,7 @@ export function cardModel(r: RaceResult, base: string = GAME_URL): CardModel {
     field: `/ ${formatInt(r.field)}`,
     rankLine: `順位 ${formatInt(r.rank)} / ${formatInt(r.field)}`,
     overtakes: `追い抜き ${formatInt(r.overtakes)}頭`,
-    time: r.timedOut || r.time === null ? 'タイム タイムアップ' : `タイム ${formatTime(r.time)}`,
+    time: r.timedOut || r.time === null ? 'タイム —' : `タイム ${formatTime(r.time)}`,
     falls: `転倒 ${r.falls}回`,
     badge: r.perfect ? 'PERFECT' : r.win ? 'WIN!' : r.timedOut ? 'TIME UP' : null,
     date: formatDate(r.date),
@@ -92,7 +92,7 @@ export function shareText(r: RaceResult): string {
 
 /** X (Twitter) Web Intent: pre-filled text + URL (an image cannot be attached this way) */
 export function xIntentUrl(text: string, url: string): string {
-  return `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
+  return `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
 }
 
 /** full post text for "copy" (the intent passes the URL separately) */

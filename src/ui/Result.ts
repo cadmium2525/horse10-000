@@ -46,7 +46,11 @@ export class ResultScreen {
       h('div', { class: 'panel result-panel' }, [
         this.summary,
         h('div', { class: 'result-layout' }, [
-          h('div', { class: 'result-card' }, [h('div', { class: 'card-tabs' }, [this.tabs.landscape, this.tabs.portrait]), this.preview]),
+          h('div', { class: 'result-card' }, [
+            h('div', { class: 'card-tabs' }, [this.tabs.landscape, this.tabs.portrait]),
+            this.preview,
+            h('div', { class: 'card-placeholder', text: '画像を作っています…' }),
+          ]),
           h('div', { class: 'result-actions' }, [
             h('div', { class: 'share-main' }, [
               button('結果画像を保存', () => void this.onSave(), 'btn btn-primary btn-save'),
@@ -72,7 +76,7 @@ export class ResultScreen {
     parent.appendChild(this.el);
   }
 
-  show(r: RaceResult | null, best: BestRecord | null = null, newBest = false): void {
+  show(r: RaceResult | null, best: BestRecord | null = null, newBest: 'first' | 'new' | null = null): void {
     document.body.classList.toggle('in-result', !!r);
     if (!r) {
       show(this.el, false);
@@ -88,12 +92,14 @@ export class ResultScreen {
       h('span', { class: 'result-line' }, [
         h('b', { class: 'big', text: formatInt(r.rank) }),
         `位 / ${formatInt(r.field)}　`,
-        r.timedOut ? 'タイムアップ' : formatTime(r.time),
+        r.timedOut ? 'タイム —' : formatTime(r.time),
         `　転倒 ${r.falls}回`,
       ]),
       h('span', {
         class: 'result-best',
-        text: best ? `自己ベスト ${formatInt(best.rank)}位${newBest ? '（更新！）' : ''}　最大連続 ${formatInt(r.maxStreak)}頭` : '',
+        text: best
+          ? `自己ベスト ${formatInt(best.rank)}位${newBest === 'new' ? '（更新！）' : newBest === 'first' ? '（初記録）' : ''}　最大連続 ${formatInt(r.maxStreak)}頭`
+          : `最大連続 ${formatInt(r.maxStreak)}頭`,
       }),
       ...(r.timedOut || r.rank > 1000
         ? [h('p', { class: 'result-hint', text: 'ヒント：左右に動いて馬群のすき間を抜けよう。倒れた馬はジャンプ、ダッシュは前が空いた所で！' })]

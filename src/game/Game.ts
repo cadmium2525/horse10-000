@@ -268,7 +268,9 @@ export class Game {
 
   private showResult(): void {
     if (!this.result) return;
-    const newBest = submitResult(this.result);
+    const hadBest = loadBest() !== null;
+    const improved = submitResult(this.result);
+    const newBest: 'first' | 'new' | null = improved ? (hadBest ? 'new' : 'first') : null;
     this.phase = 'result';
     this.resultShownAt = performance.now();
     this.input.confirmRequested = false;
@@ -337,7 +339,16 @@ export class Game {
     return ticks > 0 ? (performance.now() - t0) / ticks : 0;
   }
 
-  private readonly onResize = () => this.world.resize();
+  private readonly onResize = () => {
+    this.world.resize();
+    // the "rotate your phone" overlay covers the game: don't run the race behind it
+    if ((this.phase === 'racing' || this.phase === 'intro') && !this.paused && this.rotatePromptVisible()) this.setPaused(true);
+  };
+
+  private rotatePromptVisible(): boolean {
+    const b = document.body;
+    return b.classList.contains('touch') && !b.classList.contains('rotate-dismissed') && window.matchMedia('(orientation: portrait)').matches;
+  }
   private readonly onVisibility = () => {
     // drop accumulated time while hidden so we never fast-forward on return
     this.last = -1;

@@ -93,6 +93,7 @@ export class Hud {
 
   show(on: boolean): void {
     show(this.el, on);
+    if (!on) document.body.classList.remove('in-intro');
     if (on) {
       this.lastRank = -1;
       this.lastBurst = -1;
@@ -159,6 +160,7 @@ export class Hud {
     // start sequence: big field size, then 3-2-1-GO
     const t = s.raceTime;
     show(this.introEl, t < -0.6);
+    document.body.classList.toggle('in-intro', this.el.classList.contains('hidden') ? false : t < -0.6);
     let count = '';
     if (t < 0 && t >= -2) count = String(Math.ceil(-t));
     else if (t >= 0 && t < 0.8) count = 'GO!';

@@ -68,7 +68,8 @@ export function submitResult(r: RaceResult): boolean {
   const best = loadBest();
   const seeds = read<number[]>(KEY_SEEDS) ?? [];
   write(KEY_SEEDS, [r.seed, ...seeds.filter((s) => s !== r.seed)].slice(0, 10));
-  if (!isBetter(r, best)) return false;
+  // a timed-out run (idle / stuck) is not a record: it never becomes the personal best
+  if (r.timedOut || !isBetter(r, best)) return false;
   write(KEY_BEST, { rank: r.rank, time: r.time, seed: r.seed, perfect: r.perfect, date: r.date } satisfies BestRecord);
   return true;
 }

@@ -77,7 +77,7 @@ describe('card text = game result', () => {
     expect(r.win).toBe(false);
     const m = cardModel(r);
     expect(m.tier).toBe('normal');
-    expect(m.time).toBe('タイム タイムアップ');
+    expect(m.time).toBe('タイム —');
     expect(m.badge).toBe('TIME UP');
   });
 
@@ -101,7 +101,7 @@ describe('post text and X Web Intent', () => {
     const text = shareText(r) + ' & more';
     const url = playUrl(r.seed);
     const intent = xIntentUrl(text, url);
-    expect(intent.startsWith('https://twitter.com/intent/tweet?text=')).toBe(true);
+    expect(intent.startsWith('https://x.com/intent/post?text=')).toBe(true);
     expect(intent).not.toMatch(/[\n #🐎]/u);
     expect(intent).toContain('%23');
     const q = new URL(intent).searchParams;
