@@ -23,7 +23,23 @@ const SILKS = ['#ff4f8b', '#2fb7ff', '#ffd23f', '#7bd389', '#a66bff', '#ff8c42',
 
 type Ctx = CanvasRenderingContext2D;
 
-export function renderCard(model: CardModel, format: CardFormat, seed: number, canvas?: HTMLCanvasElement): HTMLCanvasElement {
+/** where the player's horse sits in the card photo (fraction of width / height) and how far the camera is */
+export const PHOTO_SHOT: Record<CardFormat, { focus: { x: number; y: number }; dist: number }> = {
+  landscape: { focus: { x: 0.24, y: 0.6 }, dist: 6 },
+  portrait: { focus: { x: 0.5, y: 0.4 }, dist: 10.5 },
+};
+
+/**
+ * `photo` = a render of the game's own 3D scene (World.captureCard) used as the background;
+ * without it the card falls back to the flat 2D scene (WebGL unavailable / tests).
+ */
+export function renderCard(
+  model: CardModel,
+  format: CardFormat,
+  seed: number,
+  canvas?: HTMLCanvasElement,
+  photo?: CanvasImageSource | null,
+): HTMLCanvasElement {
   const { w, h } = CARD_SIZE[format];
   const c = canvas ?? document.createElement('canvas');
   c.width = w;
@@ -31,17 +47,32 @@ export function renderCard(model: CardModel, format: CardFormat, seed: number, c
   const ctx = c.getContext('2d');
   if (!ctx) throw new Error('2D canvas unavailable');
   const rng = new Rng((seed ^ 0x9e3779b9) >>> 0);
-  const horizon = format === 'landscape' ? h * 0.42 : h * 0.3;
-  drawScene(ctx, w, h, horizon, rng);
-  if (format === 'landscape') {
-    drawHero(ctx, w * 0.2, h * 0.97, h * 0.0088, model.tier);
-    drawTextLandscape(ctx, model, w, h);
+  if (photo) {
+    ctx.drawImage(photo, 0, 0, w, h);
+    if (model.tier !== 'normal') tierGlow(ctx, w, h, format, model.tier);
   } else {
-    // text first, the horse gallops below it (never under the numbers)
-    drawTextPortrait(ctx, model, w, h);
-    drawHero(ctx, w * 0.5, h - 215, 3.4, model.tier);
+    const horizon = format === 'landscape' ? h * 0.42 : h * 0.3;
+    drawScene(ctx, w, h, horizon, rng);
+    if (format === 'landscape') drawHero(ctx, w * 0.2, h * 0.97, h * 0.0088, model.tier);
+    else drawHero(ctx, w * 0.5, 600, 3.4, model.tier);
   }
+  if (format === 'landscape') drawTextLandscape(ctx, model, w, h);
+  else drawTextPortrait(ctx, model, w, h);
   return c;
+}
+
+/** PERFECT gold / WIN blue light behind the player's horse */
+function tierGlow(ctx: Ctx, w: number, h: number, format: CardFormat, tier: CardModel['tier']): void {
+  const f = PHOTO_SHOT[format].focus;
+  const col = tier === 'perfect' ? '255,210,63' : '63,167,255';
+  const g = ctx.createRadialGradient(f.x * w, f.y * h, 0, f.x * w, f.y * h, Math.min(w, h) * 0.55);
+  g.addColorStop(0, `rgba(${col},0.38)`);
+  g.addColorStop(1, `rgba(${col},0)`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = `rgba(${col},0.95)`;
+  ctx.lineWidth = 14;
+  ctx.strokeRect(7, 7, w - 14, h - 14);
 }
 
 /** fixed OGP image (no personal result): title, copy and the crowd */
@@ -301,21 +332,22 @@ function drawTextLandscape(ctx: Ctx, m: CardModel, w: number, h: number): void {
 function drawTextPortrait(ctx: Ctx, m: CardModel, w: number, h: number): void {
   const col = TIER_COLORS[m.tier];
   const cx = w / 2;
-  panel(ctx, 40, 40, w - 80, 230, 0.45);
-  center(ctx, m.title, cx, 128, 76, '#ffffff', 900, INK, 9);
-  center(ctx, m.tagline, cx, 214, 52, '#ffe48a', 900, INK, 7);
-  panel(ctx, 40, 330, w - 80, 560, 0.78);
-  if (m.badge) badge(ctx, m.badge, cx, 405, 50, col, 'center');
-  let big = 250;
-  while (big > 90 && measure(ctx, m.rank, big, 900) + measure(ctx, '位', 80, 900) + 8 > w - 160) big -= 6;
+  // top: title; middle stays free for the photo; bottom: the numbers
+  panel(ctx, 40, 30, w - 80, 172, 0.5);
+  center(ctx, m.title, cx, 112, 72, '#ffffff', 900, INK, 9);
+  center(ctx, m.tagline, cx, 176, 46, '#ffe48a', 900, INK, 7);
+  panel(ctx, 40, 730, w - 80, 416, 0.8);
+  if (m.badge) badge(ctx, m.badge, cx, 786, 44, col, 'center');
+  let big = 200;
+  while (big > 90 && measure(ctx, m.rank, big, 900) + measure(ctx, '位', 70, 900) + 8 > w - 160) big -= 6;
   const bigW = measure(ctx, m.rank, big, 900);
-  const unitW = measure(ctx, '位', 80, 900);
+  const unitW = measure(ctx, '位', 70, 900);
   const left = cx - (bigW + unitW + 8) / 2;
-  text(ctx, m.rank, left, 660, big, col.main, 900, INK, 14);
-  text(ctx, '位', left + bigW + 8, 660, 80, col.main, 900, INK, 8);
-  center(ctx, `${m.field}頭`, cx, 735, 54, '#ffffff', 900, INK, 10);
-  center(ctx, m.overtakes, cx, 806, 50, '#ffffff', 900, INK, 10);
-  center(ctx, `${m.time}　${m.falls}`, cx, 862, 40, '#ffffff', 800, INK, 9);
+  text(ctx, m.rank, left, 950, big, col.main, 900, INK, 14);
+  text(ctx, '位', left + bigW + 8, 950, 70, col.main, 900, INK, 8);
+  center(ctx, `${m.field}頭`, cx, 1012, 46, '#ffffff', 900, INK, 9);
+  center(ctx, m.overtakes, cx, 1073, 44, '#ffffff', 900, INK, 9);
+  center(ctx, `${m.time}　${m.falls}`, cx, 1124, 36, '#ffffff', 800, INK, 8);
   // footer band
   panel(ctx, 0, h - 196, w, 196, 0.82);
   center(ctx, `${m.date}　${m.seed}`, cx, h - 150, 30, '#ffffff', 700, INK, 6);

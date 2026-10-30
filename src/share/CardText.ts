@@ -2,7 +2,7 @@ import { formatInt, formatTime, type RaceResult } from '../game/Race';
 
 /** public game URL (GitHub Pages project site) */
 export const GAME_URL = 'https://cadmium2525.github.io/horse10-000/';
-export const HASHTAG = '#10000HorseRace';
+export const HASHTAGS = ['#10000HorseRace', '#10000頭競馬'] as const;
 
 export type CardTier = 'perfect' | 'win' | 'normal';
 
@@ -80,14 +80,20 @@ export function cardModel(r: RaceResult, base: string = GAME_URL): CardModel {
   };
 }
 
-/** design §6 suggested post text */
+/** design §6 suggested post text (hashtags included; the play URL is passed separately) */
 export function shareText(r: RaceResult): string {
   return [
     '🐎 10,000頭競馬に挑戦！',
-    `🏆 ${formatInt(r.rank)}位 / ${formatInt(r.field)}頭${r.perfect ? '（PERFECT）' : ''}`,
+    `🏆 ${formatInt(r.rank)}位 / ${formatInt(r.field)}頭`,
     `💥 追い抜き${formatInt(r.overtakes)}頭・転倒${r.falls}回`,
-    HASHTAG,
+    ...(r.perfect ? ['✨ 転倒ゼロでPERFECT達成！'] : r.win ? ['🎉 1位ゴール！'] : []),
+    HASHTAGS.join(' '),
   ].join('\n');
+}
+
+/** full post text for "copy" (the intents pass the URL separately) */
+export function shareTextWithUrl(r: RaceResult, base: string = GAME_URL): string {
+  return `${shareText(r)}\n${playUrl(r.seed, base)}`;
 }
 
 /** X (Twitter) Web Intent: pre-filled text + URL (an image cannot be attached this way) */
@@ -95,9 +101,28 @@ export function xIntentUrl(text: string, url: string): string {
   return `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
 }
 
-/** full post text for "copy" (the intent passes the URL separately) */
-export function shareTextWithUrl(r: RaceResult, base: string = GAME_URL): string {
-  return `${shareText(r)}\n${playUrl(r.seed, base)}`;
+/** LINE share: text + URL (no image) */
+export function lineIntentUrl(text: string, url: string): string {
+  return `https://social-plugins.line.me/lineit/share?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`;
+}
+
+/** Facebook sharer: URL only (the quote parameter carries the text) */
+export function facebookIntentUrl(text: string, url: string): string {
+  return `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}&quote=${encodeURIComponent(text)}`;
+}
+
+export type SharePath = 'os-sheet' | 'chooser';
+
+/** the single share button: OS share sheet when it can carry the image file, else our own sheet */
+export function chooseSharePath(caps: { canShareFiles: boolean }): SharePath {
+  return caps.canShareFiles ? 'os-sheet' : 'chooser';
+}
+
+export type ShareOutcome = 'shared' | 'cancelled' | 'unsupported' | 'failed';
+
+/** what to do after navigator.share settled: cancel is silent, errors fall back to the sheet */
+export function afterShare(outcome: ShareOutcome): 'done' | 'silent' | 'chooser' {
+  return outcome === 'shared' ? 'done' : outcome === 'cancelled' ? 'silent' : 'chooser';
 }
 
 export function cardFileName(r: RaceResult, format: 'landscape' | 'portrait'): string {

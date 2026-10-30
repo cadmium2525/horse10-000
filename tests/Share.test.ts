@@ -5,7 +5,7 @@ import { HorseSimulation } from '../src/game/HorseSimulation';
 import { makeResult, type RaceResult } from '../src/game/Race';
 import {
   GAME_URL,
-  HASHTAG,
+  HASHTAGS,
   TIER_COLORS,
   cardFileName,
   cardModel,
@@ -16,6 +16,10 @@ import {
   shareTextWithUrl,
   shortUrl,
   xIntentUrl,
+  lineIntentUrl,
+  facebookIntentUrl,
+  chooseSharePath,
+  afterShare,
 } from '../src/share/CardText';
 
 /** Phase 3: the card and the post show exactly the game result (design §6). */
@@ -88,25 +92,63 @@ describe('card text = game result', () => {
   });
 });
 
-describe('post text and X Web Intent', () => {
-  it('post text follows the design §6 example', () => {
+describe('post text and Web Intents', () => {
+  it('post text: summary lines, both hashtags, no URL (passed separately)', () => {
     const r = result();
-    expect(shareText(r)).toBe(['🐎 10,000頭競馬に挑戦！', '🏆 1,248位 / 10,000頭', '💥 追い抜き8,751頭・転倒2回', HASHTAG].join('\n'));
-    expect(shareText(result({ rank: 1, falls: 0 }))).toContain('🏆 1位 / 10,000頭（PERFECT）');
+    expect(HASHTAGS).toEqual(['#10000HorseRace', '#10000頭競馬']);
+    expect(shareText(r)).toBe(
+      ['🐎 10,000頭競馬に挑戦！', '🏆 1,248位 / 10,000頭', '💥 追い抜き8,751頭・転倒2回', '#10000HorseRace #10000頭競馬'].join('\n'),
+    );
     expect(shareTextWithUrl(r)).toBe(`${shareText(r)}\n${GAME_URL}?seed=4321`);
+    expect(shareTextWithUrl(r)).toContain('?seed=4321');
   });
 
-  it('intent URL encodes text and url (emoji, newlines, #, &) and decodes back exactly', () => {
+  it('PERFECT and WIN add one line; others do not', () => {
+    expect(shareText(result({ rank: 1, falls: 0 }))).toContain('PERFECT達成');
+    expect(shareText(result({ rank: 1, falls: 1 }))).toContain('1位ゴール');
+    expect(shareText(result({ rank: 1, falls: 1 }))).not.toContain('PERFECT');
+    expect(shareText(result({ rank: 2 })).split('\n')).toHaveLength(4);
+    for (const r of [result(), result({ rank: 1, falls: 0 }), result({ rank: 1, falls: 2 })]) {
+      expect(shareText(r)).toContain('#10000HorseRace');
+      expect(shareText(r)).toContain('#10000頭競馬');
+    }
+  });
+
+  it('intent URLs encode text and url (emoji, newlines, #, &) and decode back exactly', () => {
     const r = result();
     const text = shareText(r) + ' & more';
     const url = playUrl(r.seed);
-    const intent = xIntentUrl(text, url);
-    expect(intent.startsWith('https://x.com/intent/post?text=')).toBe(true);
-    expect(intent).not.toMatch(/[\n #🐎]/u);
-    expect(intent).toContain('%23');
-    const q = new URL(intent).searchParams;
-    expect(q.get('text')).toBe(text);
-    expect(q.get('url')).toBe(url);
+    const x = xIntentUrl(text, url);
+    expect(x.startsWith('https://x.com/intent/post?text=')).toBe(true);
+    expect(x).not.toMatch(/[\n #🐎]/u);
+    expect(x).toContain('%23');
+    expect(new URL(x).searchParams.get('text')).toBe(text);
+    expect(new URL(x).searchParams.get('url')).toBe(url);
+
+    const line = lineIntentUrl(text, url);
+    expect(line.startsWith('https://social-plugins.line.me/lineit/share?')).toBe(true);
+    expect(new URL(line).searchParams.get('url')).toBe(url);
+    expect(new URL(line).searchParams.get('text')).toBe(text);
+
+    const fb = facebookIntentUrl(text, url);
+    expect(fb.startsWith('https://www.facebook.com/sharer/sharer.php?u=')).toBe(true);
+    expect(new URL(fb).searchParams.get('u')).toBe(url);
+    expect(new URL(fb).searchParams.get('quote')).toBe(text);
+    for (const u of [line, fb]) expect(u).not.toMatch(/[\n #🐎]/u);
+  });
+});
+
+describe('share path selection', () => {
+  it('file share available → OS sheet, otherwise our own chooser', () => {
+    expect(chooseSharePath({ canShareFiles: true })).toBe('os-sheet');
+    expect(chooseSharePath({ canShareFiles: false })).toBe('chooser');
+  });
+
+  it('after navigator.share: cancel is silent, success is done, anything else opens the chooser', () => {
+    expect(afterShare('shared')).toBe('done');
+    expect(afterShare('cancelled')).toBe('silent');
+    expect(afterShare('unsupported')).toBe('chooser');
+    expect(afterShare('failed')).toBe('chooser');
   });
 });
 

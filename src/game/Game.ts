@@ -9,6 +9,7 @@ import { button, h } from '../ui/dom';
 import { Hud } from '../ui/Hud';
 import { PauseMenu } from '../ui/PauseMenu';
 import { ResultScreen } from '../ui/Result';
+import { CARD_SIZE, PHOTO_SHOT, type CardFormat } from '../share/CardRenderer';
 import { TitleScreen } from '../ui/Title';
 import { TouchControls } from '../ui/TouchControls';
 import { FIELD, PLAYER, RACE, SIM } from './Config';
@@ -77,6 +78,7 @@ export class Game {
   rank: number = FIELD.HORSES;
   leaderProgress = 0;
   result: RaceResult | null = null;
+  private cardPhotos: Record<string, HTMLCanvasElement> = {};
   private finishTimer = 0;
   private resultShownAt = 0;
   /** player's progress at the gate (progress bar origin) */
@@ -178,6 +180,7 @@ export class Game {
     this.hud.show(false);
     this.touch.show(false);
     this.resultScreen.show(null);
+    this.releaseCardPhotos();
     this.pauseMenu.show(false);
   }
 
@@ -214,6 +217,7 @@ export class Game {
     this.world.rig.setMode('intro', FIELD.START_DELAY);
     this.title.show(false);
     this.resultScreen.show(null);
+    this.releaseCardPhotos();
     this.setPaused(false);
     this.hud.show(true);
     this.touch.show(this.isTouch);
@@ -253,6 +257,7 @@ export class Game {
       maxStreak: this.stats.maxStreak,
     });
     this.result = r;
+    this.captureCardPhotos();
     this.phase = 'finished';
     this.finishTimer = FINISH_BANNER_S;
     if (r.perfect) this.hud.banner('PERFECT!!', 'perfect');
@@ -266,6 +271,25 @@ export class Game {
     this.touch.show(false);
   }
 
+  /** card backgrounds: the game's own 3D scene at the goal (kept until the next race) */
+  private captureCardPhotos(): void {
+    this.releaseCardPhotos();
+    for (const f of ['landscape', 'portrait'] as CardFormat[]) {
+      try {
+        const { w, h } = CARD_SIZE[f];
+        const shot = PHOTO_SHOT[f];
+        this.cardPhotos[f] = this.world.captureCard(w, h, shot.focus, shot.dist);
+      } catch (e) {
+        console.warn('card photo failed', e); // the card falls back to the flat 2D scene
+      }
+    }
+  }
+
+  private releaseCardPhotos(): void {
+    for (const c of Object.values(this.cardPhotos)) if (c) c.width = c.height = 0;
+    this.cardPhotos = {};
+  }
+
   private showResult(): void {
     if (!this.result) return;
     const hadBest = loadBest() !== null;
@@ -275,7 +299,7 @@ export class Game {
     this.resultShownAt = performance.now();
     this.input.confirmRequested = false;
     this.hud.show(false);
-    this.resultScreen.show(this.result, loadBest(), newBest);
+    this.resultScreen.show(this.result, loadBest(), newBest, this.cardPhotos);
   }
 
   private updateSettings(patch: Partial<Settings>): void {
@@ -591,6 +615,7 @@ export class Game {
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.input.dispose();
     this.debug?.dispose();
+    this.releaseCardPhotos();
     this.world.dispose();
     this.ui.remove();
   }

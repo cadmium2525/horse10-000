@@ -1,8 +1,8 @@
 import { formatInt, formatTime, type RaceResult } from '../game/Race';
 import type { BestRecord } from '../data/Storage';
 import { CARD_SIZE, renderCard, type CardFormat } from '../share/CardRenderer';
-import { cardFileName, cardModel, playUrl, shareText, shareTextWithUrl } from '../share/CardText';
-import { canShareFiles, canvasToBlob, copyText, openXIntent, saveImage, shareImage } from '../share/Share';
+import { afterShare, cardFileName, cardModel, chooseSharePath, playUrl, shareText, shareTextWithUrl } from '../share/CardText';
+import { canShareFiles, canvasToBlob, copyText, openIntent, saveImage, shareImage, type IntentTarget } from '../share/Share';
 import { button, h, show } from './dom';
 
 export interface ResultCallbacks {
@@ -12,19 +12,25 @@ export interface ResultCallbacks {
 }
 
 /**
- * Result screen (Phase 3, design §6): preview of the result card and the share actions —
- * save PNG, OS share sheet (with the image), X Web Intent (text + URL), copy text / URL —
- * plus retry on the same course. Saving is one tap away from the result.
+ * Result screen (design §6): preview of the result card and ONE share button.
+ *  - the OS share sheet (image + text + URL) when the browser can share files (phones)
+ *  - otherwise a small sheet: X / LINE / Facebook / save the image. Web Intents cannot carry
+ *    an image, so choosing an SNS also downloads the PNG and tells the user to attach it.
+ * The card background is a photo of the game's 3D scene (taken at the goal by the Game).
  *
- * Both card PNGs are rendered as soon as the result is shown, so every action can run
- * synchronously inside the tap (popup blockers, iOS share sheet).
+ * Both card PNGs are rendered as soon as the result is shown, so the share runs synchronously
+ * inside the tap (popup blockers, iOS user activation).
  */
+export type CardPhotos = Partial<Record<CardFormat, CanvasImageSource>>;
+
 export class ResultScreen {
   readonly el: HTMLDivElement;
   private readonly summary: HTMLDivElement;
   private readonly preview: HTMLImageElement;
   private readonly status: HTMLDivElement;
-  private readonly shareBtn: HTMLButtonElement;
+  private readonly sheet: HTMLDivElement;
+  private readonly sheetNote: HTMLDivElement;
+  private photos: CardPhotos = {};
   private readonly tabs: Record<CardFormat, HTMLButtonElement>;
   private format: CardFormat = 'landscape';
   private result: RaceResult | null = null;
@@ -41,7 +47,23 @@ export class ResultScreen {
       landscape: button('横長 1200×630', () => this.setFormat('landscape'), 'tab active'),
       portrait: button('縦長 1080×1350', () => this.setFormat('portrait'), 'tab'),
     };
-    this.shareBtn = button('画像を共有', () => void this.onShare(), 'btn btn-share');
+    this.sheetNote = h('div', { class: 'sheet-note', role: 'status' });
+    const sns = (label: string, cls: string, t: IntentTarget) => button(label, () => this.onIntent(t), `btn sheet-btn ${cls}`);
+    this.sheet = h('div', { class: 'share-sheet hidden', role: 'dialog', 'aria-label': '共有先を選ぶ' }, [
+      h('div', { class: 'sheet-box' }, [
+        h('div', { class: 'sheet-title', text: '共有先を選ぶ' }),
+        sns('X に投稿', 'sheet-x', 'x'),
+        sns('LINE で送る', 'sheet-line', 'line'),
+        sns('Facebook に投稿', 'sheet-fb', 'facebook'),
+        button('画像を保存', () => void this.onSave(), 'btn sheet-btn sheet-save'),
+        h('div', { class: 'sheet-hint', text: 'SNS の投稿画面には画像を付けられないため、選ぶと画像を保存します。保存した画像を投稿画面で添付してね。' }),
+        this.sheetNote,
+        h('div', { class: 'sheet-foot' }, [
+          button('テキストをコピー', () => void this.onCopyText(), 'btn btn-small'),
+          button('閉じる', () => this.closeSheet(), 'btn btn-small btn-ghost'),
+        ]),
+      ]),
+    ]);
     this.el = h('div', { class: 'screen result hidden' }, [
       h('div', { class: 'panel result-panel' }, [
         this.summary,
@@ -52,16 +74,7 @@ export class ResultScreen {
             h('div', { class: 'card-placeholder', text: '画像を作っています…' }),
           ]),
           h('div', { class: 'result-actions' }, [
-            h('div', { class: 'share-main' }, [
-              button('結果画像を保存', () => void this.onSave(), 'btn btn-primary btn-save'),
-              this.shareBtn,
-              button('Xに投稿', () => this.onX(), 'btn btn-x'),
-            ]),
-            h('p', { class: 'share-hint', text: 'Xには「保存した画像」を添付して投稿してね' }),
-            h('div', { class: 'share-sub' }, [
-              button('投稿文をコピー', () => void this.onCopyText(), 'btn btn-small'),
-              button('URLをコピー', () => void this.onCopyUrl(), 'btn btn-small'),
-            ]),
+            button('スコアを共有する', () => void this.onShare(), 'btn btn-primary btn-share'),
             this.status,
             h('div', { class: 'result-buttons' }, [
               button('もう一度（同じコース）', () => this.cb.onRetry(), 'btn btn-retry'),
@@ -72,19 +85,24 @@ export class ResultScreen {
           ]),
         ]),
       ]),
+      this.sheet,
     ]);
     parent.appendChild(this.el);
   }
 
-  show(r: RaceResult | null, best: BestRecord | null = null, newBest: 'first' | 'new' | null = null): void {
+  show(r: RaceResult | null, best: BestRecord | null = null, newBest: 'first' | 'new' | null = null, photos: CardPhotos = {}): void {
     document.body.classList.toggle('in-result', !!r);
+    this.closeSheet();
     if (!r) {
       show(this.el, false);
       this.result = null;
+      this.photos = {};
+      this.renderToken++;
       this.releaseImages();
       return;
     }
     this.result = r;
+    this.photos = photos;
     const badge = r.perfect ? 'PERFECT' : r.win ? 'WIN!' : r.timedOut ? 'TIME UP' : 'FINISH';
     const badgeCls = r.perfect ? 'perfect' : r.win ? 'win' : r.timedOut ? 'timeup' : 'finish';
     this.summary.replaceChildren(
@@ -105,7 +123,6 @@ export class ResultScreen {
         ? [h('p', { class: 'result-hint', text: 'ヒント：左右に動いて馬群のすき間を抜けよう。倒れた馬はジャンプ、ダッシュは前が空いた所で！' })]
         : []),
     );
-    show(this.shareBtn, canShareFiles());
     this.setStatus('');
     show(this.el, true);
     void this.renderImages(r);
@@ -125,7 +142,7 @@ export class ResultScreen {
       if (document.fonts?.ready) await document.fonts.ready;
       const model = cardModel(r);
       for (const f of ['landscape', 'portrait'] as const) {
-        const canvas = renderCard(model, f, r.seed);
+        const canvas = renderCard(model, f, r.seed, undefined, this.photos[f]);
         const blob = await canvasToBlob(canvas);
         if (token !== this.renderToken) return;
         this.blobs[f] = blob;
@@ -171,48 +188,62 @@ export class ResultScreen {
     const x = this.ready();
     if (!x) return;
     const out = await saveImage(x.blob, cardFileName(x.r, this.format));
-    this.setStatus(
+    const msg =
       out === 'downloaded'
         ? '画像を保存しました'
         : out === 'opened'
           ? '新しいタブの画像を長押しして保存してね'
           : out === 'share-sheet'
             ? '共有メニューから「画像を保存」を選んでね'
-            : '保存できませんでした',
-    );
+            : '保存できませんでした';
+    this.setStatus(msg);
+    this.setSheetNote(msg);
   }
 
+  /** the one share button */
   private async onShare(): Promise<void> {
     const x = this.ready();
     if (!x) return;
-    const out = await shareImage(x.blob, cardFileName(x.r, this.format), shareText(x.r), playUrl(x.r.seed));
-    if (out === 'unsupported' || out === 'failed') {
-      // fallback (design §6): save the image + copy the text
-      await saveImage(x.blob, cardFileName(x.r, this.format));
-      const ok = await copyText(shareTextWithUrl(x.r));
-      this.setStatus(ok ? '画像を保存し、投稿文をコピーしました' : '画像を保存しました');
-    } else if (out === 'shared') {
-      this.setStatus('共有しました');
+    if (chooseSharePath({ canShareFiles: canShareFiles() }) === 'chooser') {
+      this.openSheet();
+      return;
     }
+    const out = await shareImage(x.blob, cardFileName(x.r, this.format), shareText(x.r), playUrl(x.r.seed));
+    const next = afterShare(out);
+    if (next === 'chooser') this.openSheet();
+    else if (next === 'done') this.setStatus('共有しました');
   }
 
-  private onX(): void {
-    const r = this.result;
-    if (!r) return;
-    openXIntent(shareText(r), playUrl(r.seed));
-    this.setStatus('Xの投稿画面を開きました。保存した画像を添付してね');
+  /** SNS chosen in the sheet: the image goes to the downloads, the intent opens text + URL */
+  private onIntent(t: IntentTarget): void {
+    const x = this.ready();
+    if (!x) return;
+    // both run synchronously inside the tap (the download first, then the popup)
+    void saveImage(x.blob, cardFileName(x.r, this.format));
+    openIntent(t, shareText(x.r), playUrl(x.r.seed));
+    this.setSheetNote('画像を保存しました。投稿画面で添付してください');
+    this.setStatus('画像を保存しました。投稿画面で添付してください');
+  }
+
+  private openSheet(): void {
+    this.setSheetNote('');
+    show(this.sheet, true);
+  }
+
+  private closeSheet(): void {
+    show(this.sheet, false);
+  }
+
+  private setSheetNote(s: string): void {
+    this.sheetNote.textContent = s;
   }
 
   private async onCopyText(): Promise<void> {
     const r = this.result;
     if (!r) return;
-    this.setStatus((await copyText(shareTextWithUrl(r))) ? '投稿文をコピーしました' : 'コピーできませんでした');
-  }
-
-  private async onCopyUrl(): Promise<void> {
-    const r = this.result;
-    if (!r) return;
-    this.setStatus((await copyText(playUrl(r.seed))) ? 'URLをコピーしました' : 'コピーできませんでした');
+    const msg = (await copyText(shareTextWithUrl(r))) ? 'テキストをコピーしました' : 'コピーできませんでした';
+    this.setStatus(msg);
+    this.setSheetNote(msg);
   }
 
   private setStatus(s: string): void {

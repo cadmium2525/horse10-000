@@ -930,34 +930,76 @@ body.in-intro .touch-controls {
   gap: 10px;
   text-align: center;
 }
-.share-main {
+.btn-share {
+  width: 100%;
+  min-height: 52px;
+  font-size: 20px;
+}
+/* share-target sheet (fallback when the OS share sheet cannot take the image) */
+.share-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 20, 32, 0.6);
+  padding: 12px;
+}
+.share-sheet.hidden {
+  display: none;
+}
+.sheet-box {
+  width: min(360px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  background: #fff;
+  border: 3px solid var(--ink);
+  border-radius: 18px;
+  padding: 14px;
+  text-align: center;
 }
-.share-main .btn {
+.sheet-title {
+  font: 900 18px/1.2 var(--font);
+}
+.sheet-btn {
   width: 100%;
+  min-height: 46px;
+  font-size: 16px;
+  padding: 10px 14px;
 }
-.btn-save {
-  font-size: 18px;
-}
-.btn-share {
-  background: #7bd389;
-}
-.btn-x {
+.sheet-x {
   background: #1d2433;
   color: #fff;
 }
-.share-hint {
-  margin: 0;
+.sheet-line {
+  background: #06c755;
+  color: #fff;
+}
+.sheet-fb {
+  background: #1877f2;
+  color: #fff;
+}
+.sheet-save {
+  background: var(--gold);
+}
+.sheet-hint {
   font-size: 12px;
   color: #59627a;
 }
-.share-sub {
+.sheet-note {
+  min-height: 1.2em;
+  font-size: 13px;
+  font-weight: 800;
+  color: #1d6fd1;
+}
+.sheet-foot {
   display: flex;
   gap: 8px;
   justify-content: center;
-  flex-wrap: wrap;
 }
 .btn-small {
   font-size: 13px;
@@ -1008,18 +1050,27 @@ body.in-intro .touch-controls {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 10px;
   }
-  .share-main {
-    gap: 6px;
+  .btn-share {
+    min-height: 46px;
+    font-size: 18px;
   }
-  .share-main .btn {
-    padding: 9px 14px;
+  .sheet-box {
+    gap: 5px;
+    padding: 8px 12px;
+  }
+  .sheet-btn {
+    min-height: 44px;
+    padding: 6px 12px;
+  }
+  .sheet-title,
+  .sheet-hint {
+    display: none;
   }
   .card-preview.portrait {
     max-height: 60vh;
   }
   /* 44px tap targets leave no room for the hints on a 390px-high screen */
   .result-summary .result-hint,
-  .share-hint,
   .result-actions .result-note {
     display: none;
   }

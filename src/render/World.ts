@@ -139,6 +139,60 @@ export class World {
     this.drawMs = t2 - t1;
   }
 
+  /**
+   * Share-card photo: the player's horse seen from the front-right with the field charging
+   * behind it, drawn with the game's own models / materials / environment. The main renderer
+   * is switched to the card size for one render, copied into a 2D canvas straight after the
+   * draw (no preserveDrawingBuffer needed) and then restored. LOD is raised for the shot only.
+   * `focus` = where the horse sits in the frame (0..1 of width / height).
+   */
+  captureCard(w: number, h: number, focus: { x: number; y: number }, dist: number): HTMLCanvasElement {
+    const r = this.renderer;
+    const prevPR = r.getPixelRatio();
+    const prevSize = r.getSize(new THREE.Vector2());
+    const prevLod = { ...this.horses.settings };
+    const prevMarker = this.marker.visible;
+    try {
+      r.setPixelRatio(1);
+      r.setSize(w, h, false);
+      Object.assign(this.horses.settings, LOD_LEVELS[LOD_LEVELS.length - 1]);
+      this.horses.updatePlayerPose(1);
+      const pp = this.horses.playerPose;
+      // the arrow over the player's horse picks it out of the field
+      this.marker.visible = true;
+      this.marker.position.set(pp.x, pp.y + 3.1, pp.z);
+      // camera ahead of the horse, a little to its right (three-quarter front view)
+      const fx = Math.sin(pp.heading);
+      const fz = Math.cos(pp.heading);
+      const rx = -fz;
+      const rz = fx;
+      const cam = this.cardCamera ?? (this.cardCamera = new THREE.PerspectiveCamera(36, 1, 0.3, 3200));
+      cam.aspect = w / h;
+      cam.fov = w / h < 1 ? 46 : 36;
+      cam.position.set(pp.x + fx * dist + rx * dist * 0.42, pp.y + 1.5, pp.z + fz * dist + rz * dist * 0.42);
+      cam.lookAt(pp.x, pp.y + 1.35, pp.z);
+      cam.setViewOffset(w, h, w / 2 - focus.x * w, h / 2 - focus.y * h, w, h);
+      cam.updateMatrixWorld();
+      this.env.follow(cam);
+      this.horses.update(1, cam);
+      r.render(this.scene, cam);
+      const out = document.createElement('canvas');
+      out.width = w;
+      out.height = h;
+      const ctx = out.getContext('2d');
+      if (!ctx) throw new Error('2D canvas unavailable');
+      ctx.drawImage(r.domElement, 0, 0);
+      return out;
+    } finally {
+      Object.assign(this.horses.settings, prevLod);
+      this.marker.visible = prevMarker;
+      r.setPixelRatio(prevPR);
+      r.setSize(prevSize.x, prevSize.y, false);
+    }
+  }
+
+  private cardCamera: THREE.PerspectiveCamera | null = null;
+
   dispose(): void {
     this.horses.dispose();
     this.hazards.dispose();

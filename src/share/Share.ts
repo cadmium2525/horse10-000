@@ -1,12 +1,12 @@
 /**
  * Share actions for the result card (design §6). Static site, no server: the PNG is made on
- * the device; X gets text + URL via Web Intent (an image cannot be attached that way), the OS
- * share sheet gets the file where the browser supports it.
+ * the device; the OS share sheet gets the file + text where the browser supports it, otherwise
+ * Web Intents (X / LINE / Facebook) get text + URL (an image cannot be attached that way).
  *
  * Popup blockers / iOS require window.open and navigator.share to run inside the tap
  * handler, so callers pre-render the PNG blobs before the buttons are shown.
  */
-import { xIntentUrl } from './CardText';
+import { facebookIntentUrl, lineIntentUrl, xIntentUrl, type ShareOutcome } from './CardText';
 
 export function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
@@ -68,8 +68,6 @@ export async function saveImage(blob: Blob, fileName: string): Promise<SaveOutco
   }
 }
 
-export type ShareOutcome = 'shared' | 'cancelled' | 'unsupported' | 'failed';
-
 /** OS share sheet with the image file, the post text and the play URL */
 export async function shareImage(blob: Blob, fileName: string, text: string, url: string): Promise<ShareOutcome> {
   const file = new File([blob], fileName, { type: 'image/png' });
@@ -82,18 +80,16 @@ export async function shareImage(blob: Blob, fileName: string, text: string, url
   }
 }
 
-/** X Web Intent in a new tab (text + URL pre-filled; the user attaches the saved image) */
-export function openXIntent(text: string, url: string): boolean {
+export type IntentTarget = 'x' | 'line' | 'facebook';
+
+/** Web Intent in a new tab (text + URL pre-filled; intents cannot carry an image) */
+export function openIntent(target: IntentTarget, text: string, url: string): void {
+  const href = target === 'x' ? xIntentUrl(text, url) : target === 'line' ? lineIntentUrl(text, url) : facebookIntentUrl(text, url);
   // no 'noopener' feature: with it window.open always returns null, which would look like a
   // blocked popup and navigate the game tab away. Detach the opener by hand instead.
-  const win = window.open(xIntentUrl(text, url), '_blank');
-  if (win) {
-    win.opener = null;
-  } else {
-    // popup blocked: navigate this tab instead
-    location.href = xIntentUrl(text, url);
-  }
-  return true;
+  const win = window.open(href, '_blank');
+  if (win) win.opener = null;
+  else location.href = href; // popup blocked: navigate this tab instead
 }
 
 /** clipboard with an execCommand fallback (older iOS / insecure contexts) */
